@@ -1,6 +1,6 @@
 # Alineación tab ↔ audio: diagnóstico y plan
 
-**Estado (24/10/2026, 2.ª sesión):** `cdlc build` usa la **alineación híbrida** (`align_hybrid`) con **DP de tempo** en la etapa gruesa. Banco: desarrollo 1,2 % de compases a más de ½ beat (11/12 canciones bien); validación 6,7 % (10/12). Pendiente de validar en el juego.
+**Estado (24/10/2026, 2.ª sesión):** `cdlc build` usa la **alineación híbrida** (`align_hybrid`) con **DP de tempo** en la etapa gruesa. Banco: desarrollo 1,2 % de compases a más de ½ beat (11/12 canciones bien); validación 6,7 % (10/12). **Validado en el juego** (MoP y SNA, 24/10/2026).
 
 **Master of Puppets con el método nuevo** (tab ver 7, ventanas de 10 s frente a Nacholede): mediana 10 ms, 0 % de ventanas > 100 ms, 49/49 ventanas fiables. Corrige la intro (+210 → −30 ms) y el final (−2.850 → +30 ms) del método anterior. Tarda 118 s (antes 60). El pico de memoria, 2,8 GB, es el mismo de antes y viene de la DTW completa de `chroma_warp`, que ahora solo da el tempo global: se puede sustituir por algo barato (repitiendo el banco).
 **Seven Nation Army:** coincide con la rejilla validada (mediana 9 ms, máximo 48 ms). La híbrida anterior se separaba hasta 4,7 s en los últimos 18 compases.
@@ -19,7 +19,7 @@ Desplegados para probar: `rsMetalMaste_v2_p.psarc` y `rsTheWhSeven_v7_p.psarc`.
 
 Resultados del método anterior (DTW + suavizado; ventanas de 10 s frente a Nacholede): tab nueva → mediana 10 ms, 0 % de ventanas > 300 ms. Tab antigua → mediana 20 ms, 27 % > 300 ms (en las partes donde la tab no coincide con la grabación). Seven Nation Army: coincide con la rejilla validada (11 ms) salvo en el final, donde la híbrida acierta el fin de la música (235 s frente a 230 s).
 
-Pendiente: los primeros ~5 s de MoP (+210 ms: el compás 1 se estira; poca señal en la intro), probar más canciones y quitar `align_beats`, `align_beats_dp`, `refine_local` y `onset_error` cuando la híbrida esté validada en el juego.
+(Los ~5 s iniciales de MoP, a +210 ms con este método, quedan resueltos con la DP de tempo. Los métodos antiguos `align_beats`, `align_beats_dp`, `refine_local`, `onset_error` y `smooth_warp` se quitaron del código; siguen en el historial de git.)
 
 ## Referencia real
 CDLC de Master of Puppets de *Nacholede* (CustomsForge) en `samples/Metallica_Master-of-Puppets_Nacholede_v1_p.psarc`: audio y beat map sincronizados a mano.
@@ -28,7 +28,7 @@ Para preparar la referencia:
 - Charts SNG → XML: `build/cmp/sng2xml.fsx`.
 - Audio: `.wem` → `.ogg` con `ww2ogg` y `revorb`, que están en `external/Rocksmith2014.NET/src/Rocksmith2014.Audio/Tools/win`.
 
-Evaluador en `build/ref/eval_notes.py` (copiarlo a `tests/` si se mantiene). Para cada ventana de 10 s busca el desplazamiento que más notas **de igual altura** hace coincidir (±40 ms) entre nuestro chart y el de referencia. Así tolera partes que las tabs transcriben distinto. Las ventanas con menos del 30 % de coincidencias se marcan como poco fiables.
+Evaluador en `bench/eval_notes.py`; `bench/mop.py` alinea MoP y lo evalúa. Para cada ventana de 10 s busca el desplazamiento que más notas **de igual altura** hace coincidir (±40 ms) entre nuestro chart y el de referencia. Así tolera partes que las tabs transcriben distinto. Las ventanas con menos del 30 % de coincidencias se marcan como poco fiables.
 
 ## Resultados en Master of Puppets (|error| mediano por ventana)
 | Método | Error | Ventanas > 300 ms |
@@ -67,9 +67,6 @@ Conclusiones:
 3. Quitar `refine_local` o sustituirlo por un ajuste sin sesgo (comparar el inicio del ataque, no el pico).
 4. Hacer que el informe de `cdlc build` avise cuando la alineación es dudosa (compases con duración absurda, desacuerdo entre croma y beats).
 5. Validar en el juego: Master of Puppets y Seven Nation Army.
-
-## Cambios sin commit
-`cdlc/align.py` tiene en la working copy una penalización de duración por tempo local en `align_beats_dp` (`tempo_weight`, `tempo_tolerance`). No empeora SNA y en MoP no está demostrado que mejore. Revisar con el banco de pruebas antes de hacer commit.
 
 ## Banco de pruebas (24 canciones oficiales/CDLC con beat map hecho a mano)
 - Selección (`bench/select.py` sobre `bench/survey.fsx`): 4 grupos × 6 canciones (metrónomo o tempo variable × compás regular o irregular), una por artista, repartidas 3/3 entre **desarrollo** y **validación**. La validación no se mira al ajustar.

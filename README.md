@@ -9,7 +9,7 @@ Requisitos: .NET 10 SDK, ffmpeg, Wwise 2019–2023 (paquete Authoring; 2024+ no 
 ```
 git submodule update --init
 python -m venv .venv
-.venv\Scripts\pip install -r requirements.txt --extra-index-url https://download.pytorch.org/whl/cu126
+.venv\Scripts\pip install -r requirements.txt
 dotnet build src/RsBuild -c Release
 
 .venv\Scripts\python -m cdlc inspect --tab cancion.gp          # ver pistas y afinaciones
@@ -18,11 +18,11 @@ dotnet build src/RsBuild -c Release
     --artist "..." --title "..." [--album ... --year ...] [--tone distortion]
 ```
 
-`build` convierte el audio (añade 4 s de silencio para el count-in), detecta los beats con beat_this, alinea cada negra de la tab con un beat, genera los XML (notas, acordes con nombre y digitación, técnicas, anchors, phrases), convierte con Wwise, empaqueta con DD y copia el resultado a `dlc/` como `_vN` nuevo. Para que el juego lo cargue basta con volver a la pantalla de título; no sustituyas un `.psarc` con el mismo nombre con el juego abierto.
+`build` convierte el audio (añade 4 s de silencio para el count-in), alinea cada compás de la tab con el audio (armonía con un modelo de tempo plausible y, después, batería y ataques; ver `docs/ALINEACION.md`), genera los XML (notas, acordes con nombre y digitación, técnicas, anchors, phrases), convierte con Wwise, empaqueta con DD y copia el resultado a `dlc/` como `_vN` nuevo. Para que el juego lo cargue basta con volver a la pantalla de título; no sustituyas un `.psarc` con el mismo nombre con el juego abierto.
 
 Piezas: `src/RsBuild` (F#: alphaTab + Rocksmith2014.NET) y `cdlc/` (Python: audio, alineación, CLI). Cada build deja un `report.md` en `build/<canción>/pkg/`.
 
-Limitaciones conocidas: la alineación supone que la tab es de la misma versión que el audio y que beat_this sigue negras regulares (con compases irregulares como 5/8, p. ej. *Master of Puppets*, se desfasa); un solo tono por arrangement; sin cambios de afinación dentro de un arrangement.
+Limitaciones conocidas: la alineación supone que la tab tiene la misma estructura que la grabación (sin repeticiones de más o de menos) y puede fallar en tramos largos en los que la tab casi no tiene notas; un solo tono por arrangement; sin cambios de afinación dentro de un arrangement.
 
 ---
 

@@ -1,6 +1,5 @@
-"""Preparación del audio y detección de beats para el pipeline de CDLC."""
+"""Preparación del audio para el pipeline de CDLC."""
 
-import json
 import shutil
 import subprocess
 from pathlib import Path
@@ -24,25 +23,6 @@ def to_wav(src: Path, dst: Path, pad_seconds: float = 0.0) -> Path:
         check=True,
     )
     return dst
-
-
-def detect_beats(wav: Path, out_json: Path, device: str | None = None) -> dict:
-    """Detecta beats y downbeats con beat_this y los guarda en out_json (tiempos en ms)."""
-    import torch
-    from beat_this.inference import File2Beats
-
-    if device is None:
-        device = "cuda" if torch.cuda.is_available() else "cpu"
-    f2b = File2Beats(checkpoint_path="final0", device=device, dbn=False)
-    beats, downbeats = f2b(str(wav))
-    result = {
-        "audio": str(wav),
-        "device": device,
-        "beats_ms": [round(float(t) * 1000, 1) for t in beats],
-        "downbeats_ms": [round(float(t) * 1000, 1) for t in downbeats],
-    }
-    out_json.write_text(json.dumps(result, indent=1), encoding="utf-8")
-    return result
 
 
 def duration_ms(wav: Path) -> int:

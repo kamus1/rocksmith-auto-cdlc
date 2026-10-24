@@ -66,7 +66,7 @@ Tiene que ser local por tres motivos:
 ## Después: preparar el repo público
 - Configuración en un archivo (`config.toml` o variables de entorno) en lugar de rutas fijas: carpeta `dlc/` de Rocksmith, Wwise, ffmpeg.
 - README en inglés o bilingüe, con capturas de la web, requisitos, instalación y aviso legal: usar audio propio, no compartir charts sin revisar y seguir las normas de CustomsForge.
-- `LICENSE` (por ejemplo MIT) y revisar las licencias de las dependencias: Rocksmith2014.NET MIT, alphaTab MPL-2.0, y la licencia de los pesos de beat_this.
+- `LICENSE` (por ejemplo MIT) y revisar las licencias de las dependencias: Rocksmith2014.NET MIT, alphaTab MPL-2.0. (beat_this ya no se usa.)
 - Confirmar que no se sube nada con copyright: `samples/`, `build/tones` (tonos de otros CDLC), audio.
 - Decidir con qué nombre y email firmar los commits antes de publicarlos (ahora aparece el email personal).
 - Crear el repo en GitHub (lo confirma el usuario).
