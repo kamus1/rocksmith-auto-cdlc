@@ -368,8 +368,30 @@ def _class_onsets(tl: dict) -> list[tuple[str, np.ndarray, np.ndarray]]:
     return out
 
 
+def _bar_part_chroma(tl: dict, st: np.ndarray, parts: int) -> np.ndarray:
+    """(compases, partes, 12): croma de la tab en cada trozo del compás (notas que suenan en él)."""
+    n = len(st) - 1
+    out = np.zeros((n, parts, 12))
+    for t_ms, d_ms, midi, _tr in tl["notes"]:
+        if midi < 0:
+            continue
+        k = int(np.searchsorted(st, t_ms, side="right") - 1)
+        if not 0 <= k < n:
+            continue
+        length = st[k + 1] - st[k]
+        p0 = (t_ms - st[k]) / length * parts
+        p1 = min(parts, p0 + max(d_ms, 1) / length * parts)
+        for p in range(int(p0), int(np.ceil(p1))):
+            overlap = min(p1, p + 1) - max(p0, p)
+            if overlap > 0:
+                out[k, p, int(midi) % 12] += overlap + (0.5 if p == int(p0) else 0)
+    norm = np.linalg.norm(out, axis=2, keepdims=True)
+    return np.where(norm > 0, out / np.maximum(norm, 1e-9), 0)
+
+
 def align_hybrid(timeline_json: Path, wav: Path, out_json: Path, radius_beats: float = 2.5,
-                 grid_ms: float = 10.0, smooth_weight: float = 0.5, onset_lag_ms: float = 40.0) -> dict:
+                 grid_ms: float = 10.0, smooth_weight: float = 0.5, onset_lag_ms: float = 40.0,
+                 chroma_weight: float = 3.0, chroma_parts: int = 4) -> dict:
     """Alineación híbrida (ver docstring del módulo y docs/ALINEACION.md)."""
     import librosa
 
@@ -404,6 +426,29 @@ def align_hybrid(timeline_json: Path, wav: Path, out_json: Path, radius_beats: f
     bar_w = np.array([sum(w.sum() for _, _, w in it) for it in per_bar])
     w_ref = float(np.median(bar_w[bar_w > 0])) if (bar_w > 0).any() else 1.0
 
+    # Armonía fina: croma del audio (acumulada para promediar intervalos en O(1)) y croma de la tab por trozos
+    hop_c = 512
+    C_audio = librosa.feature.chroma_cqt(y=librosa.effects.harmonic(y), sr=SR, hop_length=hop_c)
+    C_cum = np.concatenate([np.zeros((12, 1)), np.cumsum(C_audio, axis=1)], axis=1)
+    step_c = hop_c / SR * 1000
+    tab_parts = _bar_part_chroma(tl, st, chroma_parts)
+    nf = C_audio.shape[1]
+
+    def chroma_score(k: int, a: np.ndarray, b: np.ndarray) -> np.ndarray:
+        if not tab_parts[k].any():
+            return 0.0
+        total = 0.0
+        for p in range(chroma_parts):
+            if not tab_parts[k, p].any():
+                continue
+            s_ = np.clip(((a + (b - a) * p / chroma_parts) / step_c).astype(int), 0, nf - 1)
+            e_ = np.clip(((a + (b - a) * (p + 1) / chroma_parts) / step_c).astype(int), 1, nf)
+            e_ = np.maximum(e_, s_ + 1)
+            v = (C_cum[:, e_] - C_cum[:, s_])                       # (12, m, m)
+            v = v / np.maximum(np.linalg.norm(v, axis=0, keepdims=True), 1e-9)
+            total = total + np.tensordot(tab_parts[k, p], v, axes=(0, 0))
+        return total / chroma_parts
+
     def emission(k: int) -> np.ndarray:
         """(m, m): de desplazamiento i en el inicio del compás k a j en el inicio del k+1."""
         a = T_s[k] + offs[:, None]
@@ -412,7 +457,7 @@ def align_hybrid(timeline_json: Path, wav: Path, out_json: Path, radius_beats: f
         for band, frac, w in per_bar[k]:
             times = a[:, :, None] + (b - a)[:, :, None] * frac[None, None, :]
             total += scorers[band](times, w)
-        return total
+        return total + chroma_weight * w_ref * chroma_score(k, np.broadcast_to(a, (m, m)), np.broadcast_to(b, (m, m)))
 
     # Coste de cambiar el desplazamiento entre compases consecutivos (≈ cambio de tempo local)
     d = (offs[None, :] - offs[:, None]) / beat_ms

@@ -6,6 +6,7 @@
 1. **Armonía:** DTW entre la croma de la tab y la croma CENS del audio → en qué compás estamos.
 2. **Suavizado anclado localmente:** relación de tempo con mediana móvil (9 compases), integrada y anclada con la mediana del desfase en ±7 compases. Los saltos sueltos de la DTW se descartan.
 3. **Paso fino por programación dinámica:** cada compás se desplaza hasta ±2,5 beats sobre esa curva. Emisión = golpes de batería de la tab según su tipo (bombo → graves, caja → medios, platos → agudos) más guitarras y bajo con poco peso. El coste de cambiar el desplazamiento entre compases es cuadrático. Envolventes compensadas 40 ms por el retraso del pico de onset.
+   Además, **armonía fina**: cada compás se divide en 4 trozos y se compara la croma de la tab en cada trozo con la croma CQT del audio en el intervalo correspondiente (peso ×3). Resuelve los pasajes de acordes sueltos con silencios (F5/E5 en 1:50, 3:10 y 7:40), donde la batería sola se desplazaba dos beats.
 4. Preferencia suave para que la primera nota coincida con el inicio del audio.
 
 Resultados (ventanas de 10 s frente a Nacholede): tab nueva → mediana 10 ms, 0 % de ventanas > 300 ms. Tab antigua → mediana 20 ms, 27 % > 300 ms (en las partes donde la tab no coincide con la grabación). Seven Nation Army: coincide con la rejilla validada (11 ms) salvo en el final, donde la híbrida acierta el fin de la música (235 s frente a 230 s).
