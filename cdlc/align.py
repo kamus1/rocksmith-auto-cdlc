@@ -347,26 +347,32 @@ def smooth_warp(st: np.ndarray, T: np.ndarray, window: int = 9, anchor_window: i
     return S + median_filter(T - S, size=anchor_window, mode="nearest")
 
 
-def tempo_dp(tl: dict, y: np.ndarray, T_guess: np.ndarray, ratio_span: float = 0.3, ratio_step: float = 0.01,
-             tempo_weight: float = 0.0125, band: int = 4, jump_cost: float = 3.0, smooth_frames: int = 9,
-             samples: int = 16, start_ms: float = 0.0) -> np.ndarray:
+def tempo_dp(tl: dict, y: np.ndarray, T_guess: np.ndarray, ratio_span: float = 0.35, ratio_step: float = 0.015,
+             tempo_weight: float = 0.002, band: int = 3, jump_cost: float = 1.0, grid_ms: float = 25.0,
+             samples: int = 16, start_ms: float = 0.0, chroma_lag_ms: float = 160.0) -> np.ndarray:
     """Inicio (ms) de cada compás por programación dinámica con un modelo de tempo plausible.
 
-    Estado en cada frontera de compás: (instante en el audio, relación de tempo del compás anterior).
-    Cada compás dura su longitud nominal × relación de tempo; cambiar la relación entre compases
-    cuesta tempo_weight × (pasos)² hasta ±band pasos; un cambio mayor, jump_cost. La emisión es la similitud de croma
-    (coseno) entre la tab y el audio a lo largo del compás, menos su media en todo el audio (lo que
-    puntuaría una posición al azar). Así no puede saltarse ciclos de acordes repetidos: para ganar un
-    ciclo tendría que acelerar de forma irreal. T_guess (la DTW) solo da la relación de tempo global.
-    La primera nota no puede sonar antes de start_ms (inicio del audio) menos 150 ms.
+    Estado en cada frontera de compás: (instante en el audio, en pasos de grid_ms; relación de tempo
+    del compás anterior). Cada compás dura su longitud nominal × relación de tempo; cambiar la relación
+    entre compases cuesta tempo_weight × (pasos)² hasta ±band pasos, y un cambio mayor (cambio de
+    sección), jump_cost. La emisión es la similitud de croma (coseno) entre la tab y el audio a lo largo
+    del compás, menos su media en todo el audio (lo que puntuaría una posición al azar). Así no puede
+    saltarse ciclos de acordes repetidos: para ganar un ciclo tendría que acelerar de forma irreal.
+    T_guess (la DTW) solo da la relación de tempo global.
+
+    La rejilla temporal tiene que ser fina: con frames de 100 ms, un compás de 1,6 s solo puede
+    cambiar de duración en pasos del 6 % y el modelo de tempo deja de distinguir nada.
+    La primera nota no puede sonar antes de start_ms (inicio del audio) menos 150 ms. La croma del audio
+    llega chroma_lag_ms después del ataque (y la de la tab se redondea hacia abajo): se compensa al final.
+
+    Solo usa croma: se probó añadir los ataques de la tab y desplazaba canciones enteras varios beats
+    (con riffs repetitivos casan igual de bien desplazados); eso queda para el paso fino, con radio corto.
     """
     import librosa
-    from scipy.ndimage import uniform_filter1d
 
     st = np.array(tl["bar_starts_ms"])
     n = len(st) - 1
-    hop_s = HOP_CHROMA_S
-    hop_ms = hop_s * 1000
+    hop_ms = HOP_CHROMA_S * 1000
     has = np.zeros(n, dtype=bool)
     for t_ms, _d, midi, _tr in tl["notes"]:
         k = int(np.searchsorted(st, t_ms, side="right") - 1)
@@ -376,18 +382,16 @@ def tempo_dp(tl: dict, y: np.ndarray, T_guess: np.ndarray, ratio_span: float = 0
         return T_guess
     k0, k1 = int(np.argmax(has)), int(n - np.argmax(has[::-1]))      # compases [k0, k1) con notas
 
-    # Croma de la tab y del audio con el mismo suavizado, normalizadas; S = coseno tab × audio
+    # Croma de la tab (frames de hop_ms) y del audio interpolada a la rejilla, normalizadas
     n_tab = int(st[-1] / hop_ms) + 2
-    X = uniform_filter1d(np.log1p(_tab_chroma(tl, n_tab) * 10), smooth_frames, axis=1)
-    X = librosa.util.normalize(X, norm=2, axis=0, fill=False)
-    hop = int(round(hop_s * SR))
-    Y = librosa.feature.chroma_cqt(y=y, sr=SR, hop_length=hop)
-    Y = uniform_filter1d(np.log1p(Y * 10), smooth_frames, axis=1)
-    Y = librosa.util.normalize(Y, norm=2, axis=0, fill=False)
-    n_audio = Y.shape[1]
-    S = X.T @ Y                                                      # (frames tab, frames audio)
-    S = S - S.mean(axis=1, keepdims=True)
-    S = np.where(np.linalg.norm(X, axis=0)[:, None] > 0, S, 0.0)
+    X = librosa.util.normalize(np.log1p(_tab_chroma(tl, n_tab) * 10), norm=2, axis=0, fill=False)
+    Y = librosa.feature.chroma_cqt(y=y, sr=SR, hop_length=int(round(HOP_CHROMA_S * SR)))
+    Y = np.log1p(Y * 10)
+    n_g = int((Y.shape[1] - 1) * hop_ms / grid_ms) + 1
+    pos = np.arange(n_g) * grid_ms / hop_ms
+    i0 = np.minimum(pos.astype(int), Y.shape[1] - 2)
+    fr = (pos - i0)[None, :]
+    Y = librosa.util.normalize(Y[:, i0] * (1 - fr) + Y[:, i0 + 1] * fr, norm=2, axis=0, fill=False).astype(np.float32)
 
     rel = np.diff(T_guess) / np.maximum(np.diff(st), 1)
     r0 = float(np.median(rel[k0:k1]))
@@ -395,55 +399,61 @@ def tempo_dp(tl: dict, y: np.ndarray, T_guess: np.ndarray, ratio_span: float = 0
     ratios = r0 * (1 + ratio_step) ** np.arange(-n_r, n_r + 1)
     R = len(ratios)
 
-    def frames(ms: float, r: float) -> int:
+    def cells(ms: float, r: float) -> int:
         # Duraciones telescópicas: con tempo constante, la suma de compases no acumula redondeos
-        return int(round(ms * r / hop_ms))
+        return int(round(ms * r / grid_ms))
 
-    t_idx = np.arange(n_audio)
+    t_idx = np.arange(n_g)
     first_note = min(t for t, _d, midi, _tr in tl["notes"] if midi >= 0)
-    cost = np.zeros((R, n_audio))                                    # inicio libre, salvo la restricción
+    cost = np.zeros((R, n_g), dtype=np.float32)                      # inicio libre, salvo la restricción
     for i, r in enumerate(ratios):
-        cost[i, t_idx * hop_ms + (first_note - st[k0]) * r < start_ms - 150] = np.inf
-    backs_r = np.zeros((k1 - k0, R, n_audio), dtype=np.int8)
+        cost[i, t_idx * grid_ms + (first_note - st[k0]) * r < start_ms - 150] = np.inf
+    backs_r = np.zeros((k1 - k0, R, n_g), dtype=np.int8)
     for j, k in enumerate(range(k0, k1)):
-        # Transición: cambio de relación de tempo en banda (±band pasos, coste cuadrático) o salto
-        best = np.full((R, n_audio), np.inf)
-        br = np.zeros((R, n_audio), dtype=np.int8)
+        # Transición: cambio de relación de tempo en banda (coste cuadrático) o salto de sección
+        best = np.full((R, n_g), np.inf, dtype=np.float32)
+        br = np.zeros((R, n_g), dtype=np.int8)
         for dlt in range(-band, band + 1):
             lo, hi = max(0, dlt), min(R, R + dlt)                    # r' = r + dlt
-            cand = cost[lo - dlt:hi - dlt] + tempo_weight * dlt ** 2
+            cand = cost[lo - dlt:hi - dlt] + np.float32(tempo_weight * dlt ** 2)
             better = cand < best[lo:hi]
             best[lo:hi] = np.where(better, cand, best[lo:hi])
             br[lo:hi] = np.where(better, (np.arange(lo, hi) - dlt)[:, None], br[lo:hi])
         jr = np.argmin(cost, axis=0)
-        jc = cost[jr, t_idx] + jump_cost
+        jc = cost[jr, t_idx] + np.float32(jump_cost)
         better = jc[None, :] < best
         best = np.where(better, jc[None, :], best)
         br = np.where(better, jr[None, :].astype(np.int8), br)
-        # Emisión: frames de la tab del compás k, muestreados, contra el audio desde t con relación r'
-        f_a, f_b = st[k] / hop_ms, st[k + 1] / hop_ms
-        fr = np.linspace(f_a, f_b, samples, endpoint=False)
-        rows = np.clip(fr.astype(int), 0, n_tab - 1)
-        new = np.full((R, n_audio), np.inf)
+        # Emisión: similitud de unos instantes de la tab en el compás k con el audio, desde t con relación r'
+        if has[k]:
+            ts = st[k] + (st[k + 1] - st[k]) * np.arange(samples) / samples
+            rows = np.clip(np.rint(ts / hop_ms).astype(int), 0, n_tab - 1)
+            Sk = X[:, rows].T.astype(np.float32) @ Y                  # (samples, n_g)
+            Sk -= Sk.mean(axis=1, keepdims=True)
+        new = np.full((R, n_g), np.inf, dtype=np.float32)
         for i, r in enumerate(ratios):
-            dur = frames(st[k + 1], r) - frames(st[k], r)
             val = best[i]
             if has[k]:
-                cols = t_idx[None, :] + np.rint((fr - f_a) * r).astype(int)[:, None]
-                val = val - S[rows[:, None], np.clip(cols, 0, n_audio - 1)].mean(axis=0)
-            if 0 < dur < n_audio:
-                new[i, dur:] = val[:n_audio - dur]
+                em = np.zeros(n_g, dtype=np.float32)
+                for s_, t_ in enumerate(ts):
+                    o = cells(t_ - st[k], r)
+                    em[:n_g - o] += Sk[s_, o:]
+                val = val - em / samples
+            dur = cells(st[k + 1], r) - cells(st[k], r)
+            if 0 < dur < n_g:
+                new[i, dur:] = val[:n_g - dur]
         backs_r[j] = br
         cost = new
     # Retroceso: en cada frontera, (r del compás anterior, t)
     r_i, t_i = np.unravel_index(int(np.argmin(cost)), cost.shape)
     T = np.zeros(n + 1)
-    T[k1] = t_i * hop_ms
+    T[k1] = t_i * grid_ms
     for j in range(k1 - k0 - 1, -1, -1):
         k = k0 + j
-        t_i -= frames(st[k + 1], ratios[r_i]) - frames(st[k], ratios[r_i])
-        T[k] = t_i * hop_ms
+        t_i -= cells(st[k + 1], ratios[r_i]) - cells(st[k], ratios[r_i])
+        T[k] = t_i * grid_ms
         r_i = backs_r[j, r_i, t_i]
+    T[k0:k1 + 1] -= chroma_lag_ms
     # Compases vacíos de los extremos: se prolonga el tempo de los extremos alineados
     edge = max(1, min(4, (k1 - k0) // 4))
     ra = (T[k0 + edge] - T[k0]) / max(st[k0 + edge] - st[k0], 1)
@@ -515,7 +525,7 @@ def _bar_part_chroma(tl: dict, st: np.ndarray, parts: int) -> np.ndarray:
 
 def align_hybrid(timeline_json: Path, wav: Path, out_json: Path, radius_beats: float = 2.5,
                  grid_ms: float = 10.0, smooth_weight: float = 0.5, onset_lag_ms: float = 40.0,
-                 chroma_weight: float = 3.0, chroma_parts: int = 4, coarse: str = "tempo",
+                 chroma_weight: float = 3.0, chroma_parts: int = 4, anchor_weight: float = 0.3, coarse: str = "tempo",
                  tempo_params: dict | None = None) -> dict:
     """Alineación híbrida (ver docstring del módulo y docs/ALINEACION.md)."""
     import librosa
@@ -526,18 +536,19 @@ def align_hybrid(timeline_json: Path, wav: Path, out_json: Path, radius_beats: f
     n = len(lens)
     y, _ = librosa.load(str(wav), sr=SR, mono=True)
 
+    envs, step = drum_envelopes(y)
+    # El pico de la envolvente llega algo después del ataque: se compensa desplazándola hacia atrás
+    lag = int(round(onset_lag_ms / step))
+    lagged = {b: np.concatenate([e[lag:], np.zeros(lag)]) if lag > 0 else e for b, e in envs.items()}
+    scorers = {b: _Scorer(e, step) for b, e in lagged.items()}
+    classes = _class_onsets(tl)
+
     T_c = chroma_warp(tl, y)
     start_ms = audio_start_ms(wav)
     if coarse == "tempo":
         T_s = tempo_dp(tl, y, T_c, start_ms=start_ms, **(tempo_params or {}))
     else:
         T_s = smooth_warp(st, T_c)
-
-    envs, step = drum_envelopes(y)
-    # El pico de la envolvente llega algo después del ataque: se compensa desplazándola hacia atrás
-    lag = int(round(onset_lag_ms / step))
-    scorers = {b: _Scorer(np.concatenate([e[lag:], np.zeros(lag)]) if lag > 0 else e, step) for b, e in envs.items()}
-    classes = _class_onsets(tl)
 
     beat_ms = float(np.median(np.diff(T_s) / lens))             # duración típica de una negra en el audio
     offs = np.arange(-radius_beats * beat_ms, radius_beats * beat_ms + 0.001, grid_ms)
@@ -591,6 +602,8 @@ def align_hybrid(timeline_json: Path, wav: Path, out_json: Path, radius_beats: f
     # Coste de cambiar el desplazamiento entre compases consecutivos (≈ cambio de tempo local)
     d = (offs[None, :] - offs[:, None]) / beat_ms
     trans = smooth_weight * w_ref * d ** 2
+    # Ancla suave a la curva gruesa: sin ella, en tramos de ritmo ambiguo el paso fino se va a ±1 beat
+    anchor = anchor_weight * w_ref * (offs / beat_ms) ** 2
 
     # Restricción general: la primera nota de la tab no puede sonar antes de que empiece el audio.
     # Resuelve ambigüedades de ciclos que se repiten (p. ej. dos compases de los mismos acordes en
@@ -608,7 +621,7 @@ def align_hybrid(timeline_json: Path, wav: Path, out_json: Path, radius_beats: f
             cost = cost + 1e3 * w_ref * np.maximum(0, start_ms - 150 - first_ms) / beat_ms
         total = cost[:, None] + trans - emission(k)
         back[k] = np.argmin(total, axis=0)
-        cost = total[back[k], np.arange(m)]
+        cost = total[back[k], np.arange(m)] + anchor
     idx = np.zeros(n + 1, dtype=int)
     idx[n] = int(np.argmin(cost))
     for k in range(n - 1, -1, -1):
