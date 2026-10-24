@@ -54,11 +54,16 @@ def build_timeline(d: Path) -> tuple[Path, np.ndarray]:
     q = float(np.median(np.diff(beats)))
     idx_down = np.where(down)[0]
     truth = np.append(beats[idx_down], beats[-1] + q)
-    bar_starts = np.append(idx_down * q, (len(beats)) * q)
-    bar_quarters = np.diff(np.append(idx_down, len(beats))).astype(float)
+    # Algunos charts marcan los compases irregulares en corcheas (7/8 con 7 beats de media negra).
+    # Una tab los escribiría con su valor: cada intervalo de ~½ negra (o menos) cuenta como tal.
+    # Los intervalos largos no se tocan (pueden ser ritardandos o calderones, que la tab no escribe).
+    units = np.minimum(1.0, 2.0 ** np.round(np.log2(np.diff(beats) / q)))
+    pos = np.concatenate([[0.0], np.cumsum(units)]) * q          # posición nominal de cada beat
+    bar_starts = np.append(pos[idx_down], pos[-1] + q)
+    bar_quarters = np.diff(bar_starts) / q
 
     def nominal(t_ms: float) -> float:
-        return float(np.interp(t_ms, beats, np.arange(len(beats)))) * q
+        return float(np.interp(t_ms, beats, pos))
 
     notes = []
     for track, x in enumerate(xmls):
