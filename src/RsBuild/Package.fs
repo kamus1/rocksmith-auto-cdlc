@@ -63,6 +63,7 @@ let writeProject (dir: string) (info: SongInfo) (arrangements: ArrangementSpec l
                  (previewStartMs: float) (cover: string) (toneJsonPath: string) =
     let dlcKey = DLCKey.create "rsbuild" info.Artist info.Title
     let tone = JsonNode.Parse(File.ReadAllText toneJsonPath)
+    tone["Key"] <- JsonValue.Create "guitar"   // debe coincidir con BaseTone de los arrangements
     let rel (p: string) = Path.GetRelativePath(dir, p)
     let arrNode (a: ArrangementSpec) =
         let name, route =

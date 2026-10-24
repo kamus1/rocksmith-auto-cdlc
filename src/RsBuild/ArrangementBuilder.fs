@@ -29,6 +29,66 @@ let tuningOffsets (staff: Staff) =
     let reference = if t.Length = 4 then bassStandardMidi else standardMidi
     Array.init 6 (fun i -> if i < t.Length && i < reference.Length then int16 (t[i] - reference[i]) else 0s)
 
+let private pcNames = [| "C"; "C#"; "D"; "Eb"; "E"; "F"; "F#"; "G"; "Ab"; "A"; "Bb"; "B" |]
+
+/// Sufijo según los intervalos sobre la fundamental (clases de altura relativas).
+let private chordSuffixes =
+    [ set [ 0; 7 ], "5"
+      set [ 0; 4; 7 ], ""
+      set [ 0; 3; 7 ], "m"
+      set [ 0; 4; 7; 10 ], "7"
+      set [ 0; 3; 7; 10 ], "m7"
+      set [ 0; 4; 7; 11 ], "maj7"
+      set [ 0; 2; 7 ], "sus2"
+      set [ 0; 5; 7 ], "sus4"
+      set [ 0; 3; 6 ], "dim"
+      set [ 0; 4; 8 ], "aug"
+      set [ 0; 2; 4; 7 ], "add9"
+      set [ 0; 7; 10 ], "7"
+      set [ 0; 4; 10 ], "7" ]
+    |> Map.ofList
+
+/// Nombre del acorde a partir de la altura MIDI de cada nota (cuerda grave primero).
+/// Se prueba como fundamental la nota más grave y, si no encaja, el resto (inversiones, p. ej. "C/G").
+let chordName (pitches: int list) =
+    match pitches with
+    | [] -> ""
+    | _ ->
+        let bass = List.min pitches % 12
+        let pcs = pitches |> List.map (fun p -> p % 12) |> Set.ofList
+        // Dos clases de altura: solo se nombra si es un power chord (quinta)
+        if pcs.Count = 1 then ""
+        elif pcs.Count = 2 && not (pcs.Contains((bass + 7) % 12)) then ""
+        else
+            let tryRoot r =
+                let rel = pcs |> Set.map (fun pc -> (pc - r + 12) % 12)
+                chordSuffixes.TryFind rel |> Option.map (fun suffix -> pcNames[r] + suffix)
+            match tryRoot bass with
+            | Some n -> n
+            | None ->
+                pcs
+                |> Seq.tryPick (fun r -> tryRoot r |> Option.map (fun n -> $"{n}/{pcNames[bass]}"))
+                |> Option.defaultValue ""
+
+/// Digitación simple: traste mínimo = dedo 1 (cejilla si se repite), el resto según la distancia.
+/// Si dos cuerdas comparten distancia > 0, se reparten dedos consecutivos (power chord 1-3-4).
+let chordFingers (frets: sbyte[]) =
+    let fingers = Array.create frets.Length -1y
+    let fretted = frets |> Array.indexed |> Array.filter (fun (_, f) -> f > 0y)
+    if fretted.Length > 0 then
+        let minFret = fretted |> Array.map snd |> Array.min
+        let mutable used = Set.empty
+        for (i, f) in fretted |> Array.sortBy (fun (i, f) -> f, i) do
+            let d = int (f - minFret)
+            let ideal = if d = 0 then 1 else min 4 (d + 1)
+            let finger =
+                if d = 0 then 1
+                elif used.Contains ideal && ideal < 4 then ideal + 1
+                else ideal
+            used <- used.Add finger
+            fingers[i] <- sbyte finger
+    fingers
+
 type ArrangementKind =
     | Lead
     | Rhythm
@@ -134,6 +194,9 @@ let build (score: Score) (trackIndex: int) (kind: ArrangementKind) (order: int l
             else
                 lastOnString[s] <- i
 
+    // Altura MIDI de cada cuerda al aire (grave primero), para nombrar acordes
+    let openPitches = staff.StringTuning.Tunings |> Seq.map int |> Seq.rev |> Seq.toArray
+
     // 3. Notas, acordes y handshapes
     let arr = InstrumentalArrangement()
     let level = Level(0y)
@@ -154,7 +217,12 @@ let build (score: Score) (trackIndex: int) (kind: ArrangementKind) (order: int l
                 | true, id -> id
                 | _ ->
                     let id = int16 arr.ChordTemplates.Count
-                    arr.ChordTemplates.Add(ChordTemplate("", "", Array.create 6 -1y, frets))
+                    let pitches =
+                        frets |> Array.indexed |> Array.choose (fun (i, f) ->
+                            if f >= 0y && i < openPitches.Length then Some(openPitches[i] + int f) else None)
+                        |> List.ofArray
+                    let name = chordName pitches
+                    arr.ChordTemplates.Add(ChordTemplate(name, name, chordFingers frets, frets))
                     templates[key] <- id
                     id
             let chord = Chord()

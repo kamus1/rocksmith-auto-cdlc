@@ -11,6 +11,7 @@
     <Compile Include="GpImport.fs" />
     <Compile Include="Align.fs" />
     <Compile Include="ArrangementBuilder.fs" />
+    <Compile Include="Tones.fs" />
     <Compile Include="Package.fs" />
     <Compile Include="Program.fs" />
   </ItemGroup>
@@ -22,6 +23,7 @@
     <ProjectReference Include="..\..\external\Rocksmith2014.NET\src\Rocksmith2014.Audio\Rocksmith2014.Audio.fsproj" />
     <ProjectReference Include="..\..\external\Rocksmith2014.NET\src\Rocksmith2014.DLCProject\Rocksmith2014.DLCProject.fsproj" />
     <ProjectReference Include="..\..\external\Rocksmith2014.NET\src\Rocksmith2014.Common\Rocksmith2014.Common.fsproj" />
+    <ProjectReference Include="..\..\external\Rocksmith2014.NET\src\Rocksmith2014.PSARC\Rocksmith2014.PSARC.fsproj" />
   </ItemGroup>
 
   <ItemGroup>

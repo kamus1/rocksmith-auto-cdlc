@@ -52,6 +52,58 @@ def rsbuild(*args: str, env: dict | None = None) -> str:
     return p.stdout
 
 
+TONES_DIR = ROOT / "build" / "tones"
+TONE_CATEGORIES = {
+    "clean": ["Clean"],
+    "overdrive": ["Overdrive", "Lead Overdrive", "Overdrive Lead"],
+    "crunch": ["Overdrive", "Distortion"],
+    "distortion": ["Distortion"],
+    "highgain": ["High Gain", "Distortion High Gain"],
+    "acoustic": ["Acoustic"],
+    "fuzz": ["Fuzz"],
+}
+
+
+def resolve_tone(tone: str | None, artist: str | None, title: str | None) -> tuple[Path | None, str]:
+    """Elige el tono: archivo, categoría o automático (misma canción → mismo artista → distorsión)."""
+    if tone and Path(tone).is_file():
+        return Path(tone).resolve(), f"archivo {tone}"
+    index_path = TONES_DIR / "index.json"
+    if not index_path.exists():
+        if tone:
+            raise SystemExit("No hay biblioteca de tonos: ejecuta primero `python -m cdlc tones`.")
+        return None, "tono por defecto (sin biblioteca)"
+    entries = json.loads(index_path.read_text(encoding="utf-8"))
+
+    def pick(cands: list[dict]) -> dict | None:
+        if not cands:
+            return None
+        # Preferir distorsión/overdrive en el arrangement Lead, después el resto en orden estable
+        rank = {"Distortion": 0, "High Gain": 0, "Overdrive": 1, "Lead": 2, "Clean": 3}
+        return sorted(cands, key=lambda e: (rank.get(e["Descriptors"], 4), e["Arrangement"] != "Lead", e["File"]))[0]
+
+    if tone:
+        wanted = TONE_CATEGORIES.get(tone.lower())
+        if wanted is None:
+            raise SystemExit(f"--tone debe ser un archivo o una categoría: {', '.join(TONE_CATEGORIES)}")
+        cands = [e for e in entries if e["Descriptors"] in wanted]
+        chosen = sorted(cands, key=lambda e: (e["Arrangement"] != "Lead", e["File"]))[0] if cands else None
+        if chosen is None:
+            raise SystemExit(f"No hay tonos de la categoría {tone} en la biblioteca")
+        return TONES_DIR / chosen["File"], f"categoría {tone}: {chosen['Song']} / {chosen['Name']}"
+
+    norm = lambda s: re.sub(r"[^a-z0-9]", "", (s or "").lower())
+    if artist and title:
+        same_song = [e for e in entries if norm(e["Song"]) == norm(f"{artist} - {title}")]
+        if (c := pick(same_song)):
+            return TONES_DIR / c["File"], f"misma canción: {c['Song']} / {c['Name']} ({c['Descriptors']})"
+    if artist:
+        same_artist = [e for e in entries if norm(e["Song"].split(" - ")[0]) == norm(artist)]
+        if (c := pick(same_artist)):
+            return TONES_DIR / c["File"], f"mismo artista: {c['Song']} / {c['Name']} ({c['Descriptors']})"
+    return None, "tono por defecto"
+
+
 def slug(text: str) -> str:
     return re.sub(r"[^a-z0-9]+", "-", text.lower()).strip("-") or "cancion"
 
@@ -82,11 +134,16 @@ def cmd_build(a: argparse.Namespace) -> None:
     r = align.align_beats(out / "timeline.json", wav, out / "beats.json", out / "bar_times.json")
     bpm_note = f"compás 1 en {r['bar_times_ms'][0] / 1000:.2f} s, beats irregulares: {r['irregular_beat_intervals']}"
     print(f"      {bpm_note}")
-    err = align.onset_error(out / "timeline.json", out / "bar_times.json", wav, a.lead)
-    print(f"      error mediano de ataques (pista {a.lead}): {err['median_ms']} ms, "
+    # La batería da la medida más fiable (ataques nítidos); sin batería, la pista Lead
+    tl = json.loads((out / "timeline.json").read_text(encoding="utf-8"))
+    drums = sorted({int(n[3]) for n in tl["notes"] if n[2] < 0})
+    ref_track, ref_name = (drums[0], "batería") if drums else (a.lead, f"pista {a.lead}")
+    err = align.onset_error(out / "timeline.json", out / "bar_times.json", wav, ref_track)
+    print(f"      error mediano de ataques ({ref_name}): {err['median_ms']} ms, "
           f"{err['within_50ms'] * 100:.0f}% a menos de 50 ms")
 
-    print("[5/6] XML, audio Wwise y empaquetado")
+    tone_path, tone_desc = resolve_tone(a.tone, a.artist, a.title)
+    print(f"[5/6] XML, audio Wwise y empaquetado — tono: {tone_desc}")
     args = ["build", "--tab", str(tab), "--lead", str(a.lead), "--bar-times", str(out / "bar_times.json"),
             "--wav", str(wav), "--out-dir", str(out / "pkg")]
     if a.rhythm is not None:
@@ -95,6 +152,8 @@ def cmd_build(a: argparse.Namespace) -> None:
         value = getattr(a, key)
         if value:
             args += [f"--{key}", str(value)]
+    if tone_path:
+        args += ["--tone", str(tone_path)]
     env = dict(os.environ, WWISEROOT=wwise)
     log = rsbuild(*args, env=env)
     print("      " + log.strip().replace("\n", "\n      "))
@@ -102,7 +161,8 @@ def cmd_build(a: argparse.Namespace) -> None:
 
     report = out / "pkg" / "report.md"
     with report.open("a", encoding="utf-8") as f:
-        f.write(f"\n## Alineación\n- {bpm_note}\n- Error mediano de ataques: {err['median_ms']} ms "
+        f.write(f"\n## Tono\n- {tone_desc}\n")
+        f.write(f"\n## Alineación\n- {bpm_note}\n- Error mediano de ataques ({ref_name}): {err['median_ms']} ms "
                 f"(p90 {err['p90_ms']} ms, {err['within_50ms'] * 100:.0f}% < 50 ms)\n")
         if r["suspicious_bars"]:
             f.write(f"- Compases con tempo raro: {r['suspicious_bars'][:40]}\n")
@@ -113,6 +173,10 @@ def cmd_build(a: argparse.Namespace) -> None:
         shutil.copy2(psarc, DLC_DIR / psarc.name)
         print(f"[6/6] Copiado a {DLC_DIR / psarc.name}")
         print("      Vuelve a la pantalla de título del juego para que lo cargue.")
+
+
+def cmd_tones(a: argparse.Namespace) -> None:
+    print(rsbuild("tones", str(Path(a.dlc).resolve()), str(TONES_DIR)).strip())
 
 
 def cmd_inspect(a: argparse.Namespace) -> None:
@@ -136,10 +200,16 @@ def main(argv: list[str] | None = None) -> None:
     b.add_argument("--album")
     b.add_argument("--year", type=int)
     b.add_argument("--cover", help="portada (png/jpg)")
+    b.add_argument("--tone", help=f"archivo de tono o categoría ({', '.join(TONE_CATEGORIES)}); "
+                                  "por defecto: misma canción o mismo artista de la biblioteca")
     b.add_argument("--name", help="nombre de la carpeta en build/")
     b.add_argument("--pad", type=float, default=4.0, help="segundos de silencio al inicio (count-in)")
     b.add_argument("--no-deploy", action="store_true", help="no copiar a la carpeta dlc del juego")
     b.set_defaults(func=cmd_build)
+
+    t = sub.add_parser("tones", help="extrae la biblioteca de tonos de los CDLC instalados")
+    t.add_argument("--dlc", default=str(DLC_DIR))
+    t.set_defaults(func=cmd_tones)
 
     i = sub.add_parser("inspect", help="muestra pistas, afinaciones y compases de la tab")
     i.add_argument("--tab", required=True)

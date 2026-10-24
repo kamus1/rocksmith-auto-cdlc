@@ -39,6 +39,7 @@ let private usage () =
     eprintfn "  RsBuild xml <tab> <pista> <offset_ms> <duracion_ms> <salida.xml>      (tempo escrito)"
     eprintfn "  RsBuild build --tab T --lead N [--rhythm M] --bar-times J --wav W --out-dir D"
     eprintfn "                --artist A --title T [--album A] [--year Y] [--cover C] [--preview-ms P] [--tone J]"
+    eprintfn "  RsBuild tones <carpeta_dlc> <salida>     (extrae tonos de guitarra de los .psarc)"
     eprintfn "  RsBuild pack <proyecto.rs2dlc> <salida_sin_extension>"
     2
 
@@ -56,6 +57,11 @@ let main argv =
         let timing score order = ArrangementBuilder.barTimesFromTempo score order (float offsetMs), []
         let _, _, report = tabToXml (Path.GetFullPath tab) (int track) ArrangementBuilder.Lead timing (int songLengthMs) (Path.GetFullPath outXml)
         report |> List.iter (printfn "%s")
+        0
+    | [| "tones"; dlcDir; outDir |] ->
+        let psarcs = Directory.EnumerateFiles(Path.GetFullPath dlcDir, "*_p.psarc", SearchOption.AllDirectories)
+        let entries = Tones.extract psarcs (Path.GetFullPath outDir)
+        printfn "%d tonos extraídos en %s" entries.Count outDir
         0
     | [| "pack"; project; outBase |] ->
         let psarc = (Package.buildFromProject (Path.GetFullPath project) (Path.GetFullPath outBase)).GetAwaiter().GetResult()
