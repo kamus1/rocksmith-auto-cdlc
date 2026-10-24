@@ -262,8 +262,11 @@ def cmd_build(a: argparse.Namespace) -> None:
     print("      " + rsbuild("timeline", str(tab), str(out / "timeline.json")).strip())
 
     print("[4/6] Alineación tab ↔ audio")
-    r = align.align_beats(out / "timeline.json", wav, out / "beats.json", out / "bar_times.json")
-    bpm_note = f"compás 1 en {r['bar_times_ms'][0] / 1000:.2f} s, beats irregulares: {r['irregular_beat_intervals']}"
+    align.align_beats_dp(out / "timeline.json", wav, out / "beats.json", out / "bar_times_grid.json")
+    r = align.refine_local(out / "timeline.json", wav, out / "bar_times_grid.json", out / "bar_times.json")
+    bpm_note = (f"compás 1 en {r['bar_times_ms'][0] / 1000:.2f} s, beats irregulares: {r['irregular_beat_intervals']}, "
+                f"saltos de medio beat: {r['half_beat_jumps']}, cambios de relación beat/negra: {len(r['ratio_changes'])}, "
+                f"ajuste fino medio: {r['refine_mean_abs_shift_ms']} ms")
     print(f"      {bpm_note}")
     # La batería da la medida más fiable (ataques nítidos); sin batería, la pista Lead
     tl = json.loads((out / "timeline.json").read_text(encoding="utf-8"))
