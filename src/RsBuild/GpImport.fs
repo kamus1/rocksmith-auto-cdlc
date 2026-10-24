@@ -105,7 +105,17 @@ let exportTimeline (path: string) (outJson: string) =
                                 if not n.IsTieDestination && not n.IsDead then
                                     let tMs = starts[k] + durs[k] * b.PlaybackStart / barTicks
                                     let dMs = durs[k] * b.PlaybackDuration / barTicks
-                                    let midi = if isDrums then -1.0 else float (n.CalculateRealValue(true, true))
+                                    // Batería: -(nota MIDI de percusión: 35/36 bombo, 38/40 caja…); -1 si no se conoce
+                                    let midi =
+                                        if isDrums then
+                                            let a = int n.PercussionArticulation
+                                            let arts = t.PercussionArticulations
+                                            let drum =
+                                                if a >= 0 && a < arts.Count then int arts[a].OutputMidiNumber
+                                                elif a > 0 then a
+                                                else int n.Fret
+                                            if drum > 0 then -(float drum) else -1.0
+                                        else float (n.CalculateRealValue(true, true))
                                     notes.Add [| tMs; dMs; float midi; float t.Index |])
     let json =
         System.Text.Json.JsonSerializer.Serialize(

@@ -131,13 +131,15 @@ def resolve_tone(tone: str | None, artist: str | None, title: str | None,
 
 LEAD_HINT = re.compile(r"lead|solo|hammett|slash|gilmour", re.I)
 RHYTHM_HINT = re.compile(r"rhythm|rhytm|ritm|r[ií]tmica|hetfield|izzy", re.I)
+NOT_GUITAR = re.compile(r"voice|vocal|voz|melod|keys|piano|synth|organ|strings", re.I)
 
 
 def choose_tracks(info: dict) -> tuple[int, int | None, str]:
     """Elige las pistas Lead y Rhythm de la tab. Devuelve (lead, rhythm, explicación)."""
     bars = max(1, info["bars"])
     guitars = [t for t in info["tracks"]
-               if t["strings"] in (6, 7) and not t["is_percussion"] and t["bars_with_notes"] >= 0.1 * bars]
+               if t["strings"] in (6, 7) and not t["is_percussion"] and t["bars_with_notes"] >= 0.1 * bars
+               and not NOT_GUITAR.search(t["name"])]
     if not guitars:
         # Sin guitarras: usar la pista con altura que más compases cubra (p. ej. un bajo tocado en guitarra)
         pitched = [t for t in info["tracks"] if not t["is_percussion"] and t["bars_with_notes"] > 0]
@@ -239,7 +241,7 @@ def cmd_build(a: argparse.Namespace) -> None:
         tracks_desc = f"Lead = pista {lead}" + (f", Rhythm = pista {rhythm}" if rhythm is not None else "")
     out = ROOT / "build" / (a.name or slug(f"{meta['artist']} {meta['title']}"))
     out.mkdir(parents=True, exist_ok=True)
-    print(f"[0/6] {meta['artist']} - {meta['title']} | {tracks_desc}")
+    print(f"[0/5] {meta['artist']} - {meta['title']} | {tracks_desc}")
 
     if not a.no_lookup and (meta["year"] is None or meta["cover"] is None or not meta["album"]):
         found = lookup_song(meta["artist"], meta["title"])
@@ -251,34 +253,25 @@ def cmd_build(a: argparse.Namespace) -> None:
         if found:
             print(f"      iTunes: {meta['album']} ({meta['year']}), portada {'sí' if meta['cover'] else 'no'}")
 
-    print(f"[1/6] Audio → WAV (+{a.pad:g} s de silencio)")
+    print(f"[1/5] Audio → WAV (+{a.pad:g} s de silencio)")
     wav = audio.to_wav(audio_in, out / "song.wav", pad_seconds=a.pad)
 
-    print("[2/6] Detección de beats (beat_this)")
-    beats = audio.detect_beats(wav, out / "beats.json")
-    print(f"      {len(beats['beats_ms'])} beats en {beats['device']}")
-
-    print("[3/6] Línea de tiempo de la tab")
+    print("[2/5] Línea de tiempo de la tab")
     print("      " + rsbuild("timeline", str(tab), str(out / "timeline.json")).strip())
 
-    print("[4/6] Alineación tab ↔ audio")
-    align.align_beats_dp(out / "timeline.json", wav, out / "beats.json", out / "bar_times_grid.json")
-    r = align.refine_local(out / "timeline.json", wav, out / "bar_times_grid.json", out / "bar_times.json")
-    bpm_note = (f"compás 1 en {r['bar_times_ms'][0] / 1000:.2f} s, beats irregulares: {r['irregular_beat_intervals']}, "
-                f"saltos de medio beat: {r['half_beat_jumps']}, cambios de relación beat/negra: {len(r['ratio_changes'])}, "
-                f"ajuste fino medio: {r['refine_mean_abs_shift_ms']} ms")
+    print("[3/5] Alineación tab ↔ audio (armonía + batería + tempo)")
+    r = align.align_hybrid(out / "timeline.json", wav, out / "bar_times.json")
+    bpm_note = (f"compás 1 en {r['bar_times_ms'][0] / 1000:.2f} s, relación de tempo {r['tempo_ratio_median']}, "
+                f"corrección media sobre la armonía: {r['mean_abs_offset_ms']} ms, "
+                f"compases con tempo raro: {len(r['suspicious_bars'])}")
     print(f"      {bpm_note}")
-    # La batería da la medida más fiable (ataques nítidos); sin batería, la pista Lead
     tl = json.loads((out / "timeline.json").read_text(encoding="utf-8"))
-    drums = sorted({int(n[3]) for n in tl["notes"] if n[2] < 0})
-    ref_track, ref_name = (drums[0], "batería") if drums else (lead, f"pista {lead}")
-    err = align.onset_error(out / "timeline.json", out / "bar_times.json", wav, ref_track)
-    print(f"      error mediano de ataques ({ref_name}): {err['median_ms']} ms, "
-          f"{err['within_50ms'] * 100:.0f}% a menos de 50 ms")
+    if not any(n[2] < 0 for n in tl["notes"]):
+        print("      AVISO: la tab no tiene batería; la alineación fina será menos precisa.")
 
     lead_program = next((t["program"] for t in info["tracks"] if t["index"] == lead), None)
     tone_path, tone_desc = resolve_tone(a.tone, meta["artist"], meta["title"], lead_program)
-    print(f"[5/6] XML, audio Wwise y empaquetado — tono: {tone_desc}")
+    print(f"[4/5] XML, audio Wwise y empaquetado — tono: {tone_desc}")
     args = ["build", "--tab", str(tab), "--lead", str(lead), "--bar-times", str(out / "bar_times.json"),
             "--wav", str(wav), "--out-dir", str(out / "pkg")]
     if rhythm is not None:
@@ -298,16 +291,15 @@ def cmd_build(a: argparse.Namespace) -> None:
     with report.open("a", encoding="utf-8") as f:
         f.write(f"\n## Pistas\n- {tracks_desc}\n")
         f.write(f"\n## Tono\n- {tone_desc}\n")
-        f.write(f"\n## Alineación\n- {bpm_note}\n- Error mediano de ataques ({ref_name}): {err['median_ms']} ms "
-                f"(p90 {err['p90_ms']} ms, {err['within_50ms'] * 100:.0f}% < 50 ms)\n")
+        f.write(f"\n## Alineación\n- {bpm_note}\n")
         if r["suspicious_bars"]:
             f.write(f"- Compases con tempo raro: {r['suspicious_bars'][:40]}\n")
 
     if a.no_deploy:
-        print(f"[6/6] Sin copiar a dlc/: {psarc}")
+        print(f"[5/5] Sin copiar a dlc/: {psarc}")
     else:
         target = deploy(psarc)
-        print(f"[6/6] Copiado a {target}")
+        print(f"[5/5] Copiado a {target}")
         print("      Vuelve a la pantalla de título del juego para que lo cargue.")
 
 
