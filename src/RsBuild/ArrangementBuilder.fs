@@ -150,7 +150,10 @@ type BuildResult =
       Warnings: string list }
 
 /// Construye el arrangement Lead desde una pista de la tab y los tiempos de cada compás.
-let build (score: Score) (trackIndex: int) (kind: ArrangementKind) (order: int list) (barTimes: BarTimes) (songLengthMs: int) : BuildResult =
+/// barEnds[k] es el fin real del compás k: igual a barTimes[k + 1] salvo si después hay un hueco (audio
+/// que no está en la tab), que queda sin notas y con beats al mismo tempo.
+let build (score: Score) (trackIndex: int) (kind: ArrangementKind) (order: int list) (barTimes: BarTimes) (barEnds: float[])
+          (songLengthMs: int) : BuildResult =
     let staff = score.Tracks[trackIndex].Staves[0]
     let warnings = ResizeArray<string>()
     match staff.StringTuning.Tunings.Count with
@@ -159,7 +162,7 @@ let build (score: Score) (trackIndex: int) (kind: ArrangementKind) (order: int l
     | n -> warnings.Add $"La pista tiene {n} cuerdas; solo se usan 6."
 
     let timeAt (k: int) (tick: float) (barTicks: float) =
-        let a, b = barTimes[k], barTimes[k + 1]
+        let a, b = barTimes[k], barEnds[k]
         int (Math.Round(a + (b - a) * (tick / barTicks)))
 
     // 1. Eventos (beats con notas) en orden de reproducción
@@ -271,7 +274,15 @@ let build (score: Score) (trackIndex: int) (kind: ArrangementKind) (order: int l
     order |> List.iteri (fun k mbIndex ->
         let num = int score.MasterBars[mbIndex].TimeSignatureNumerator
         for b in 0 .. num - 1 do
-            beatTimes.Add(barTimes[k] + (barTimes[k + 1] - barTimes[k]) * float b / float num, (b = 0)))
+            beatTimes.Add(barTimes[k] + (barEnds[k] - barTimes[k]) * float b / float num, (b = 0))
+        // Hueco: compases sin notas al tempo del compás anterior hasta el siguiente compás de la tab
+        let beatLen = (barEnds[k] - barTimes[k]) / float num
+        let mutable t = barEnds[k]
+        let mutable b = 0
+        while t < barTimes[k + 1] - beatLen * 0.5 do
+            beatTimes.Add(t, (b % num = 0))
+            t <- t + beatLen
+            b <- b + 1)
     let mutable measure = 0s
     for (t, isDown) in beatTimes do
         if isDown then measure <- measure + 1s

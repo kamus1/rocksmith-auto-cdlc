@@ -4,12 +4,12 @@ open System
 open System.IO
 
 /// Tab → XML de Rocksmith con los tiempos de compás dados. Devuelve el arrangement y las líneas del informe.
-let tabToXml (tab: string) (track: int) (kind: ArrangementBuilder.ArrangementKind) (barTimes: AlphaTab.Model.Score -> int list -> float[] * string list)
+let tabToXml (tab: string) (track: int) (kind: ArrangementBuilder.ArrangementKind) (barTimes: AlphaTab.Model.Score -> int list -> float[] * float[] * string list)
              (songLengthMs: int) (outXml: string) =
     let score = GpImport.load tab
     let order = GpImport.playbackOrder score
-    let times, timingNotes = barTimes score order
-    let r = ArrangementBuilder.build score track kind order times songLengthMs
+    let times, ends, timingNotes = barTimes score order
+    let r = ArrangementBuilder.build score track kind order times ends songLengthMs
     let arr = r.Arrangement
     Rocksmith2014.XML.Processing.PhraseGenerator.generate arr
     let issues = Rocksmith2014.XML.Processing.ArrangementChecker.checkInstrumental arr
@@ -57,7 +57,9 @@ let main argv =
         GpImport.exportTimeline (Path.GetFullPath tab) (Path.GetFullPath outJson)
         0
     | [| "xml"; tab; track; offsetMs; songLengthMs; outXml |] ->
-        let timing score order = ArrangementBuilder.barTimesFromTempo score order (float offsetMs), []
+        let timing score order =
+            let t = ArrangementBuilder.barTimesFromTempo score order (float offsetMs)
+            t, t[1..], []
         let _, _, report = tabToXml (Path.GetFullPath tab) (int track) ArrangementBuilder.Lead timing (int songLengthMs) (Path.GetFullPath outXml)
         report |> List.iter (printfn "%s")
         0
@@ -82,12 +84,17 @@ let main argv =
             int r.TotalTime.TotalMilliseconds
         let barTimesJson = Path.GetFullPath(req "bar-times")
         let timing _ _ =
-            let times, suspicious = Align.loadBarTimes barTimesJson
+            let times, ends, suspicious = Align.loadBarTimes barTimesJson
+            let gaps =
+                [ for k in 0 .. ends.Length - 1 do
+                      if times[k + 1] - ends[k] > 1.0 then
+                          yield $"ALINEACIÓN: {(times[k + 1] - ends[k]) / 1000.0:F1} s de audio que no está en la tab antes del compás {k + 2} (queda sin notas)" ]
             let notes =
-                if suspicious.IsEmpty then []
-                else [ $"ALINEACIÓN: {suspicious.Length} compases con tempo >10%% distinto de la mediana: " +
-                       (suspicious |> List.truncate 30 |> List.map (sprintf "c%d") |> String.concat ", ") ]
-            times, notes
+                gaps @
+                (if suspicious.IsEmpty then []
+                 else [ $"ALINEACIÓN: {suspicious.Length} compases con tempo >10%% distinto de la mediana: " +
+                        (suspicious |> List.truncate 30 |> List.map (sprintf "c%d") |> String.concat ", ") ])
+            times, ends, notes
         let tab = Path.GetFullPath(req "tab")
         let parts =
             [ yield ArrangementBuilder.Lead, int (req "lead")
