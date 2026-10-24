@@ -1,0 +1,6 @@
+bin/
+obj/
+build/
+samples/
+.venv/
+__pycache__/

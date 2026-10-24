@@ -1,0 +1,37 @@
+{
+  "GearList": {
+    "Amp": {
+      "Type": "Amps",
+      "KnobValues": {
+        "Amp_OrangeAD50_Gain": 70,
+        "Amp_OrangeAD50_Bass": 50,
+        "Amp_OrangeAD50_Treble": 60,
+        "Amp_OrangeAD50_Mid": 55
+      },
+      "Key": "Amp_OrangeAD50"
+    },
+    "Cabinet": {
+      "Type": "Cabinets",
+      "KnobValues": {},
+      "Key": "Cab_OrangePPC212OB_Condenser_Cone"
+    },
+    "PostPedal1": {
+      "Type": "Pedals",
+      "KnobValues": {
+        "Pedal_SpringReverb_Time": 40,
+        "Pedal_SpringReverb_Depth": 40,
+        "Pedal_SpringReverb_Mix": 15
+      },
+      "Key": "Pedal_SpringReverb",
+      "Category": "Reverb"
+    }
+  },
+  "ToneDescriptors": [
+    "$[35722]DISTORTION"
+  ],
+  "NameSeparator": " - ",
+  "IsCustom": true,
+  "Volume": "-19.5",
+  "Key": "guitar",
+  "Name": "guitar"
+}

@@ -1,0 +1,31 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <PlatformTarget>x64</PlatformTarget>
+    <Nullable>disable</Nullable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Compile Include="GpImport.fs" />
+    <Compile Include="Align.fs" />
+    <Compile Include="ArrangementBuilder.fs" />
+    <Compile Include="Package.fs" />
+    <Compile Include="Program.fs" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\external\Rocksmith2014.NET\src\Rocksmith2014.XML\Rocksmith2014.XML.csproj" />
+    <ProjectReference Include="..\..\external\Rocksmith2014.NET\src\Rocksmith2014.XML.Processing\Rocksmith2014.XML.Processing.fsproj" />
+    <ProjectReference Include="..\..\external\Rocksmith2014.NET\src\Rocksmith2014.DD\Rocksmith2014.DD.fsproj" />
+    <ProjectReference Include="..\..\external\Rocksmith2014.NET\src\Rocksmith2014.Audio\Rocksmith2014.Audio.fsproj" />
+    <ProjectReference Include="..\..\external\Rocksmith2014.NET\src\Rocksmith2014.DLCProject\Rocksmith2014.DLCProject.fsproj" />
+    <ProjectReference Include="..\..\external\Rocksmith2014.NET\src\Rocksmith2014.Common\Rocksmith2014.Common.fsproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="AlphaTab" Version="1.8.4" />
+  </ItemGroup>
+
+</Project>
