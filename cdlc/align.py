@@ -293,12 +293,21 @@ def _tab_chroma(tl: dict, n_frames: int) -> np.ndarray:
 
 
 def chroma_warp(tl: dict, y: np.ndarray, band_rad: float = 0.1) -> np.ndarray:
-    """Inicio (ms) de cada compás según DTW entre la croma de la tab y la croma CENS del audio."""
+    """Inicio (ms) de cada compás según DTW entre la croma de la tab y la croma CENS del audio.
+
+    Solo se alinea el tramo con notas (de la primera a la última): los compases vacíos de los
+    extremos (count-in, final) no tienen nada que casar y desplazarían todo. Esos compases se
+    colocan después prolongando el tempo de los extremos alineados.
+    """
     import librosa
 
     st = np.array(tl["bar_starts_ms"])
-    n_tab = int(st[-1] / 1000 / HOP_CHROMA_S) + 1
-    X = np.log1p(_tab_chroma(tl, n_tab) * 10)
+    pitched = [(n[0], n[0] + max(n[1], 1)) for n in tl["notes"] if n[2] >= 0] or [(n[0], n[0] + 1) for n in tl["notes"]]
+    t_first = min(a for a, _ in pitched)
+    t_last = max(b for _, b in pitched)
+    f0 = int(t_first / 1000 / HOP_CHROMA_S)
+    f1 = int(t_last / 1000 / HOP_CHROMA_S) + 1
+    X = np.log1p(_tab_chroma(tl, f1)[:, f0:f1] * 10)
     X = librosa.util.normalize(X, norm=2, axis=0, fill=True)
     _, (s0, s1) = librosa.effects.trim(y, top_db=40)
     hop = int(round(HOP_CHROMA_S * SR))
@@ -306,6 +315,7 @@ def chroma_warp(tl: dict, y: np.ndarray, band_rad: float = 0.1) -> np.ndarray:
     _, wp = librosa.sequence.dtw(X=X, Y=Y, metric="cosine", backtrack=True,
                                  global_constraints=True, band_rad=band_rad)
     wp = wp[::-1]
+    n_tab = f1 - f0
     t2a = np.full(n_tab, np.nan)
     for i in range(n_tab):
         js = wp[wp[:, 0] == i, 1]
@@ -313,8 +323,16 @@ def chroma_warp(tl: dict, y: np.ndarray, band_rad: float = 0.1) -> np.ndarray:
             t2a[i] = np.median(js) * HOP_CHROMA_S * 1000 + s0 / SR * 1000
     idx = np.arange(n_tab)
     ok = ~np.isnan(t2a)
-    t2a = np.interp(idx, idx[ok], t2a[ok])
-    return np.maximum.accumulate(np.interp(st / 1000 / HOP_CHROMA_S, idx, t2a))
+    t2a = np.maximum.accumulate(np.interp(idx, idx[ok], t2a[ok]))
+    # Tab (ms) → audio (ms) dentro del tramo con notas; fuera, se prolonga la pendiente de los extremos
+    tab_ms = (idx + f0) * HOP_CHROMA_S * 1000
+    edge = max(2, n_tab // 10)
+    slope_a = (t2a[edge] - t2a[0]) / max(tab_ms[edge] - tab_ms[0], 1)
+    slope_b = (t2a[-1] - t2a[-1 - edge]) / max(tab_ms[-1] - tab_ms[-1 - edge], 1)
+    out = np.interp(st, tab_ms, t2a)
+    out = np.where(st < tab_ms[0], t2a[0] + (st - tab_ms[0]) * slope_a, out)
+    out = np.where(st > tab_ms[-1], t2a[-1] + (st - tab_ms[-1]) * slope_b, out)
+    return np.maximum.accumulate(out)
 
 
 def smooth_warp(st: np.ndarray, T: np.ndarray, window: int = 9, anchor_window: int = 15) -> np.ndarray:
@@ -463,17 +481,19 @@ def align_hybrid(timeline_json: Path, wav: Path, out_json: Path, radius_beats: f
     d = (offs[None, :] - offs[:, None]) / beat_ms
     trans = smooth_weight * w_ref * d ** 2
 
-    # Preferencia suave: la primera nota de la tab suele coincidir con el inicio del audio
-    cost = np.zeros(m)
+    # Restricción general: la primera nota de la tab no puede sonar antes de que empiece el audio.
+    # Resuelve ambigüedades de ciclos que se repiten (p. ej. dos compases de los mismos acordes en
+    # toda la canción) sin suponer que la tab empieza a la vez que el audio (puede haber una intro
+    # de batería o voz que no está en la tab).
+    start_ms = audio_start_ms(wav)
     first = next((k for k in range(n) if per_bar[k]), None)
-    if first is not None:
-        f0 = min(fr.min() for _, fr, _ in per_bar[first])
-        if first == 0:
-            first_ms = T_s[0] + offs + (T_s[1] - T_s[0]) * f0
-            start_ms = audio_start_ms(wav)
-            cost = w_ref * np.minimum(np.abs(first_ms - start_ms) / 250.0, 3.0)
+    cost = np.zeros(m)
     back = np.zeros((n, m), dtype=np.int32)
     for k in range(n):
+        if k == first:
+            f0 = min(fr.min() for _, fr, _ in per_bar[k])
+            first_ms = T_s[k] + offs + (T_s[k + 1] - T_s[k]) * f0
+            cost = np.where(first_ms < start_ms - 150, np.inf, cost)
         total = cost[:, None] + trans - emission(k)
         back[k] = np.argmin(total, axis=0)
         cost = total[back[k], np.arange(m)]

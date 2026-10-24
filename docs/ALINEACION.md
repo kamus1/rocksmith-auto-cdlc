@@ -62,3 +62,21 @@ Conclusiones:
 
 ## Cambios sin commit
 `cdlc/align.py` tiene en la working copy una penalización de duración por tempo local en `align_beats_dp` (`tempo_weight`, `tempo_tolerance`). No empeora SNA y en MoP no está demostrado que mejore. Revisar con el banco de pruebas antes de hacer commit.
+
+## Banco de pruebas (24 canciones oficiales/CDLC con beat map hecho a mano)
+- Selección (`bench/select.py` sobre `bench/survey.fsx`): 4 grupos × 6 canciones (metrónomo o tempo variable × compás regular o irregular), una por artista, repartidas 3/3 entre **desarrollo** y **validación**. La validación no se mira al ajustar.
+- `bench/extract.fsx` extrae charts y audio; `bench/run.py` construye una "tab" a tempo fijo con la misma estructura y notas (Lead + Rhythm + Bass, **sin batería**), alinea y compara cada compás con notas con el real.
+- Uso: `.venv/Scripts/python bench/run.py --set desarrollo --tag nombre [--params '{"onset_lag_ms": 20}']`.
+
+### Resultados (desarrollo, 12 canciones)
+| Versión | Mediana de medianas | Compases a más de ½ beat | Canciones bien (<5 % de compases mal) |
+|---|---|---|---|
+| Híbrida tal como quedó tras MoP (contando todos los compases) | 22 ms | 33,6 % | 0/12 |
+| + armonía solo en el tramo con notas, midiendo compases con notas | 17 ms | 25,7 % | 4/12 |
+| + restricción de inicio general | 17 ms | 25,7 % | 4/12 |
+
+### Fallos generales encontrados
+1. **Compases vacíos al principio** (count-in) desplazaban la DTW de armonía → corregido: la DTW solo usa el tramo entre la primera y la última nota.
+2. **La preferencia "la primera nota coincide con el inicio del audio" era un sobreajuste a MoP** → sustituida por una restricción que siempre es cierta (ninguna nota antes de que suene el audio).
+3. **Música repetitiva (ciclos de acordes iguales): la DTW se salta ciclos enteros** (Deep Blue Something: −2 compases entre el compás 11 y el 31; Machine Head: segundos de error). El paso fino (±2,5 beats) no llega a corregirlo. **Pendiente:** imponer un tempo plausible, ya sea limitando la pendiente de la DTW o con una búsqueda amplia y un modelo de tempo de segundo orden, y volver a medir con el banco.
+4. Pendiente de revisar: Joy Division y Mastodon (la mitad de los compases a más de ½ beat) y Queensrÿche (p90 de 1,1 s).
