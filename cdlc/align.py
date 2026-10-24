@@ -1,8 +1,10 @@
-"""Alineación tab ↔ audio por seguimiento rítmico.
+"""Alineación tab ↔ audio por rejilla de beats.
 
-Se compara el patrón de ataques de la tab (batería, bajo y guitarras) con la envolvente de
-onsets del audio. Primero se busca el inicio y el tempo de los primeros compases; después se
-avanza compás a compás con una ventana deslizante que reajusta el tempo localmente.
+Cada negra de la tab se asigna a un beat detectado por beat_this; el beat que corresponde al
+compás 1 se elige comparando los ataques de la tab (batería, bajo y guitarras) con la envolvente
+de onsets del audio. Se descartaron por imprecisos: downbeats de beat_this (fallan con compases
+irregulares), DTW sobre croma (se pierde con guitarras distorsionadas) y seguimiento rítmico
+compás a compás, voraz o con Viterbi (ambiguo en riffs repetitivos).
 """
 
 import json
@@ -54,133 +56,6 @@ class _Scorer:
         """times_ms con forma (..., n) → puntuación (...)."""
         idx = np.clip(np.rint(times_ms / self.step).astype(int), 0, len(self.env) - 1)
         return (self.env[idx] * w).sum(axis=-1)
-
-
-def align(timeline_json: Path, wav: Path, out_json: Path, window_bars: int = 4,
-          max_start_ms: float = 30000.0) -> dict:
-    tl = json.loads(timeline_json.read_text(encoding="utf-8"))
-    st = np.array(tl["bar_starts_ms"])
-    n = len(st) - 1
-    on_t, on_w = tab_onsets(tl)
-    env, step = onset_envelope(wav)
-    score = _Scorer(env, step)
-
-    def window(k: int, bars: int):
-        a, b = st[k], st[min(n, k + bars)]
-        sel = (on_t >= a) & (on_t < b)
-        return on_t[sel] - a, on_w[sel]
-
-    # 1. Inicio y tempo: primeros 8 compases contra todo el rango de inicios posibles
-    rel, w = window(0, 8)
-    scales = np.arange(0.85, 1.15001, 0.005)
-    starts = np.arange(0.0, max_start_ms, step)
-    best = (-1.0, 0.0, 1.0)
-    for s in scales:
-        cand = starts[:, None] + s * rel[None, :]
-        sc = score(cand, w)
-        i = int(np.argmax(sc))
-        if sc[i] > best[0]:
-            best = (float(sc[i]), float(starts[i]), float(s))
-    _, t0, s_prev = best
-
-    # 2. Seguimiento compás a compás
-    T = np.zeros(n + 1)
-    T[0] = t0
-    scales_used = np.zeros(n)
-    deltas = np.arange(-40.0, 40.001, 5.0)
-    for k in range(n):
-        rel, w = window(k, window_bars)
-        if len(rel) >= 3:
-            ss = s_prev * np.arange(0.92, 1.08001, 0.005)
-            ss = ss[(ss > 0.6) & (ss < 1.6)]
-            cand = T[k] + deltas[:, None, None] + ss[None, :, None] * rel[None, None, :]
-            sc = score(cand, w)
-            sc = sc - 0.5 * w.sum() * np.abs(np.log(ss / s_prev))[None, :]  # preferir tempo estable
-            di, si = np.unravel_index(int(np.argmax(sc)), sc.shape)
-            if k > 0:
-                T[k] = max(T[k - 1] + 1, T[k] + deltas[di])
-            s_prev = float(ss[si])
-        scales_used[k] = s_prev
-        T[k + 1] = T[k] + s_prev * (st[k + 1] - st[k])
-
-    ratio = np.diff(T) / np.diff(st)
-    med = float(np.median(ratio))
-    suspicious = [int(k + 1) for k, r in enumerate(ratio) if abs(r / med - 1) > 0.1]
-    result = {
-        "bar_times_ms": [round(float(t), 1) for t in T],
-        "tempo_ratio_median": round(med, 4),
-        "suspicious_bars": suspicious,
-    }
-    out_json.write_text(json.dumps(result, indent=1), encoding="utf-8")
-    return result
-
-
-def align_dp(timeline_json: Path, wav: Path, out_json: Path, radius_ms: float = 1500.0,
-             grid_ms: float = 20.0, tempo_tolerance: float = 0.02, smooth_weight: float = 0.5) -> dict:
-    """Alineación global por programación dinámica.
-
-    Cada inicio de compás T_k se elige en una rejilla alrededor de la predicción a tempo constante.
-    Coste de pasar de T_k a T_k+1: -(ataques del compás k que caen en onsets) + penalización por
-    alejarse del tempo global. Los compases con mucha señal anclan a los ambiguos.
-    """
-    tl = json.loads(timeline_json.read_text(encoding="utf-8"))
-    st = np.array(tl["bar_starts_ms"])
-    n = len(st) - 1
-    on_t, on_w = tab_onsets(tl)
-    env, step = onset_envelope(wav)
-    score = _Scorer(env, step)
-
-    # Tempo global e inicio: del seguimiento voraz (robusto en el arranque)
-    greedy = align(timeline_json, wav, out_json)
-    g = np.array(greedy["bar_times_ms"])
-    s_g = greedy["tempo_ratio_median"]
-    pred = g[0] + s_g * (st - st[0])
-    # Centrar la rejilla en el voraz suavizado para cubrir derivas largas
-    centre = pred + np.convolve(g - pred, np.ones(9) / 9, mode="same")
-
-    offs = np.arange(-radius_ms, radius_ms + 0.001, grid_ms)
-    m = len(offs)
-    bar_w = np.array([on_w[(on_t >= st[k]) & (on_t < st[k + 1])].sum() for k in range(n)])
-    w_ref = float(np.median(bar_w[bar_w > 0])) if (bar_w > 0).any() else 1.0
-
-    cost = np.zeros(m)  # coste acumulado hasta T_0 (sin preferencia)
-    back = np.zeros((n, m), dtype=np.int32)
-    for k in range(n):
-        Tk = centre[k] + offs            # (m,)
-        Tk1 = centre[k + 1] + offs       # (m,)
-        nominal = s_g * (st[k + 1] - st[k])
-        dur = Tk1[None, :] - Tk[:, None]  # (m, m): de i (T_k) a j (T_k+1)
-        valid = dur > nominal * 0.5
-        dev = np.log(np.where(valid, dur, 1.0) / nominal) / tempo_tolerance
-        trans = smooth_weight * w_ref * dev ** 2
-        sel = (on_t >= st[k]) & (on_t < st[k + 1])
-        if sel.any():
-            frac = (on_t[sel] - st[k]) / (st[k + 1] - st[k])
-            times = Tk[:, None, None] + dur[:, :, None] * frac[None, None, :]
-            emis = score(times, on_w[sel])
-        else:
-            emis = 0.0
-        total = cost[:, None] + trans - emis
-        total = np.where(valid, total, np.inf)
-        back[k] = np.argmin(total, axis=0)
-        cost = total[back[k], np.arange(m)]
-
-    idx = np.zeros(n + 1, dtype=int)
-    idx[n] = int(np.argmin(cost))
-    for k in range(n - 1, -1, -1):
-        idx[k] = back[k, idx[k + 1]]
-    T = centre + offs[idx]
-
-    ratio = np.diff(T) / np.diff(st)
-    med = float(np.median(ratio))
-    result = {
-        "bar_times_ms": [round(float(t), 1) for t in T],
-        "tempo_ratio_median": round(med, 4),
-        "suspicious_bars": [int(k + 1) for k, r in enumerate(ratio) if abs(r / med - 1) > 0.1],
-        "method": "dp",
-    }
-    out_json.write_text(json.dumps(result, indent=1), encoding="utf-8")
-    return result
 
 
 def align_beats(timeline_json: Path, wav: Path, beats_json: Path, out_json: Path) -> dict:

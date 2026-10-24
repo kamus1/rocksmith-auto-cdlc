@@ -1,6 +1,28 @@
 # Rocksmith CDLC: investigación
 
-Investigación del 22/10/2026 sobre qué son los CDLC de Rocksmith, cómo se crean a mano y cómo se podría automatizar el proceso. **Estado: solo investigación, no hay nada construido.**
+Investigación del 22/10/2026 sobre qué son los CDLC de Rocksmith, cómo se crean a mano y cómo se podría automatizar el proceso. **Estado (24/10/2026): MVP funcionando en Windows** — audio + tab de Guitar Pro → `.psarc` jugable, probado en el juego.
+
+## Uso
+
+Requisitos: .NET 10 SDK, ffmpeg, Wwise 2019–2023 (paquete Authoring; 2024+ no es compatible) y Python 3.12.
+
+```
+git submodule update --init
+python -m venv .venv
+.venv\Scripts\pip install -r requirements.txt --extra-index-url https://download.pytorch.org/whl/cu126
+dotnet build src/RsBuild -c Release
+
+.venv\Scripts\python -m cdlc inspect --tab cancion.gp          # ver pistas y afinaciones
+.venv\Scripts\python -m cdlc tones                             # biblioteca de tonos desde los CDLC instalados
+.venv\Scripts\python -m cdlc build --audio cancion.mp3 --tab cancion.gp --lead 0 [--rhythm 1] \
+    --artist "..." --title "..." [--album ... --year ...] [--tone distortion]
+```
+
+`build` convierte el audio (añade 4 s de silencio para el count-in), detecta los beats con beat_this, alinea cada negra de la tab con un beat, genera los XML (notas, acordes con nombre y digitación, técnicas, anchors, phrases), convierte con Wwise, empaqueta con DD y copia el resultado a `dlc/` como `_vN` nuevo. Para que el juego lo cargue basta con volver a la pantalla de título; no sustituyas un `.psarc` con el mismo nombre con el juego abierto.
+
+Piezas: `src/RsBuild` (F#: alphaTab + Rocksmith2014.NET) y `cdlc/` (Python: audio, alineación, CLI). Cada build deja un `report.md` en `build/<canción>/pkg/`.
+
+Limitaciones conocidas: la alineación supone que la tab es de la misma versión que el audio y que beat_this sigue negras regulares (con compases irregulares como 5/8, p. ej. *Master of Puppets*, se desfasa); un solo tono por arrangement; sin cambios de afinación dentro de un arrangement.
 
 ---
 

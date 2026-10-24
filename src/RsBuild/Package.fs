@@ -63,13 +63,15 @@ let writeProject (dir: string) (info: SongInfo) (arrangements: ArrangementSpec l
                  (previewStartMs: float) (cover: string) (toneJsonPath: string) =
     let dlcKey = DLCKey.create "rsbuild" info.Artist info.Title
     let tone = JsonNode.Parse(File.ReadAllText toneJsonPath)
-    tone["Key"] <- JsonValue.Create "guitar"   // debe coincidir con BaseTone de los arrangements
+    // Clave y nombre deben coincidir con BaseTone de los arrangements (como en el tono por defecto)
+    tone["Key"] <- JsonValue.Create "guitar"
+    tone["Name"] <- JsonValue.Create "guitar"
     let rel (p: string) = Path.GetRelativePath(dir, p)
     let arrNode (a: ArrangementSpec) =
         let name, route =
             match a.Kind with
             | ArrangementBuilder.Lead -> 0, 1
-            | ArrangementBuilder.Rhythm -> 1, 2
+            | ArrangementBuilder.Rhythm -> 2, 2
         JsonNode.Parse(
             JsonSerializer.Serialize(
                 {| Case = "Instrumental"

@@ -170,9 +170,29 @@ def cmd_build(a: argparse.Namespace) -> None:
     if a.no_deploy:
         print(f"[6/6] Sin copiar a dlc/: {psarc}")
     else:
-        shutil.copy2(psarc, DLC_DIR / psarc.name)
-        print(f"[6/6] Copiado a {DLC_DIR / psarc.name}")
+        target = deploy(psarc)
+        print(f"[6/6] Copiado a {target}")
         print("      Vuelve a la pantalla de título del juego para que lo cargue.")
+
+
+def deploy(psarc: Path) -> Path:
+    """Copia el .psarc a dlc/ con un número de versión nuevo y borra las versiones anteriores.
+
+    El juego no relee un archivo que sustituimos con el mismo nombre mientras está abierto
+    (la canción desaparece al elegirla), pero sí detecta archivos nuevos al volver al título.
+    """
+    key = re.sub(r"_v\d+_p\.psarc$", "", psarc.name)
+    pattern = re.compile(rf"^{re.escape(key)}_v(\d+)_p\.psarc$")
+    old = [p for p in DLC_DIR.glob(f"{key}_v*_p.psarc") if pattern.match(p.name)]
+    version = max((int(pattern.match(p.name).group(1)) for p in old), default=0) + 1
+    target = DLC_DIR / f"{key}_v{version}_p.psarc"
+    shutil.copy2(psarc, target)
+    for p in old:
+        try:
+            p.unlink()
+        except OSError as e:
+            print(f"      No se pudo borrar {p.name} ({e}); bórralo con el juego cerrado.")
+    return target
 
 
 def cmd_tones(a: argparse.Namespace) -> None:
