@@ -1,6 +1,10 @@
 # Alineación tab ↔ audio: diagnóstico y plan
 
-**Estado (24/10/2026, 2.ª sesión):** `cdlc build` usa la **alineación híbrida** (`align_hybrid`) con **DP de tempo** en la etapa gruesa. Banco: desarrollo 1,2 % de compases a más de ½ beat (11/12 canciones bien); validación 6,7 % (10/12). Pendiente de validar en el juego (los números de MoP de abajo son del método anterior: hay que repetirlos).
+**Estado (24/10/2026, 2.ª sesión):** `cdlc build` usa la **alineación híbrida** (`align_hybrid`) con **DP de tempo** en la etapa gruesa. Banco: desarrollo 1,2 % de compases a más de ½ beat (11/12 canciones bien); validación 6,7 % (10/12). Pendiente de validar en el juego.
+
+**Master of Puppets con el método nuevo** (tab ver 7, ventanas de 10 s frente a Nacholede): mediana 10 ms, 0 % de ventanas > 100 ms, 49/49 ventanas fiables. Corrige la intro (+210 → −30 ms) y el final (−2.850 → +30 ms) del método anterior. Tarda 118 s (antes 60). El pico de memoria, 2,8 GB, es el mismo de antes y viene de la DTW completa de `chroma_warp`, que ahora solo da el tempo global: se puede sustituir por algo barato (repitiendo el banco).
+**Seven Nation Army:** coincide con la rejilla validada (mediana 9 ms, máximo 48 ms). La híbrida anterior se separaba hasta 4,7 s en los últimos 18 compases.
+Desplegados para probar: `rsMetalMaste_v2_p.psarc` y `rsTheWhSeven_v7_p.psarc`.
 
 ## Método actual: `align_hybrid`
 1. **DTW de armonía** (`chroma_warp`): solo para estimar la relación de tempo global (mediana).
