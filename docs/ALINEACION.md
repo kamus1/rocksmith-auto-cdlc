@@ -1,15 +1,19 @@
 # Alineación tab ↔ audio: diagnóstico y plan
 
-**Estado (24/10/2026):** `cdlc build` usa la **alineación híbrida** (`align_hybrid`). Con la referencia de Master of Puppets el error típico es de **~10 ms** (antes ~840 ms con la rejilla de beats). Pendiente de validar en el juego.
+**Estado (24/10/2026, 2.ª sesión):** `cdlc build` usa la **alineación híbrida** (`align_hybrid`) con **DP de tempo** en la etapa gruesa. Banco: desarrollo 1,2 % de compases a más de ½ beat (11/12 canciones bien); validación 6,7 % (10/12). Pendiente de validar en el juego (los números de MoP de abajo son del método anterior: hay que repetirlos).
 
 ## Método actual: `align_hybrid`
-1. **Armonía:** DTW entre la croma de la tab y la croma CENS del audio → en qué compás estamos.
-2. **Suavizado anclado localmente:** relación de tempo con mediana móvil (9 compases), integrada y anclada con la mediana del desfase en ±7 compases. Los saltos sueltos de la DTW se descartan.
-3. **Paso fino por programación dinámica:** cada compás se desplaza hasta ±2,5 beats sobre esa curva. Emisión = golpes de batería de la tab según su tipo (bombo → graves, caja → medios, platos → agudos) más guitarras y bajo con poco peso. El coste de cambiar el desplazamiento entre compases es cuadrático. Envolventes compensadas 40 ms por el retraso del pico de onset.
+1. **DTW de armonía** (`chroma_warp`): solo para estimar la relación de tempo global (mediana).
+2. **DP de tempo** (`tempo_dp`), la etapa gruesa. Estado en cada frontera de compás = (instante en una rejilla de 25 ms, relación de tempo en pasos de 1,5 %, ±35 % alrededor de la global). Cada compás dura su longitud nominal × la relación. El tempo puede cambiar hasta ±3 pasos (±4,5 %) por compás con un coste casi nulo (0,002 × pasos²). Un cambio mayor (cambio de sección) cuesta 1,0. Emisión = coseno entre la croma de la tab (16 instantes del compás) y la croma CQT del audio, menos su media en todo el audio. Croma sin suavizar. El retraso de la croma del audio respecto al ataque (160 ms) se compensa al final. Restricción: ninguna nota antes de que suene el audio. Los compases vacíos de los extremos prolongan el tempo de los extremos.
+   - Así no puede saltarse ciclos de acordes repetidos: para ganar un ciclo tendría que acelerar de forma irreal.
+   - La **rejilla fina es imprescindible**: con frames de 100 ms, un compás de 1,6 s solo podía cambiar de duración en pasos del ~6 %, y los parámetros del modelo de tempo no hacían nada.
+   - El modelo útil es el **límite de banda** más el salto de sección, no la penalización cuadrática: con más rigidez (0,02–1,0) empeoran las canciones de tempo variable.
+3. **Paso fino por programación dinámica:** cada compás se desplaza hasta ±2,5 beats sobre la curva gruesa. Emisión = golpes de batería de la tab según su tipo (bombo → graves, caja → medios, platos → agudos) más guitarras y bajo con poco peso. El coste de cambiar el desplazamiento entre compases es cuadrático. Envolventes compensadas 40 ms por el retraso del pico de onset.
    Además, **armonía fina**: cada compás se divide en 4 trozos y se compara la croma de la tab en cada trozo con la croma CQT del audio en el intervalo correspondiente (peso ×3). Resuelve los pasajes de acordes sueltos con silencios (F5/E5 en 1:50, 3:10 y 7:40), donde la batería sola se desplazaba dos beats.
-4. Preferencia suave para que la primera nota coincida con el inicio del audio.
+   **Ancla** a la curva gruesa: 0,3 × (desplazamiento en beats)². Sin ella, en tramos de ritmo ambiguo se iba a ±1 beat. Barrido: 0,1 → 3,4 %, 0,3 → 1,9 %, 1,0 → 3,3 %.
+4. Restricción de inicio también en el paso fino, con **penalización finita**. Con `inf`, si ningún desplazamiento la cumplía, todos los costes eran `inf` y el `argmin` devolvía el índice 0: toda la canción quedaba desplazada −2,5 beats.
 
-Resultados (ventanas de 10 s frente a Nacholede): tab nueva → mediana 10 ms, 0 % de ventanas > 300 ms. Tab antigua → mediana 20 ms, 27 % > 300 ms (en las partes donde la tab no coincide con la grabación). Seven Nation Army: coincide con la rejilla validada (11 ms) salvo en el final, donde la híbrida acierta el fin de la música (235 s frente a 230 s).
+Resultados del método anterior (DTW + suavizado; ventanas de 10 s frente a Nacholede): tab nueva → mediana 10 ms, 0 % de ventanas > 300 ms. Tab antigua → mediana 20 ms, 27 % > 300 ms (en las partes donde la tab no coincide con la grabación). Seven Nation Army: coincide con la rejilla validada (11 ms) salvo en el final, donde la híbrida acierta el fin de la música (235 s frente a 230 s).
 
 Pendiente: los primeros ~5 s de MoP (+210 ms: el compás 1 se estira; poca señal en la intro), probar más canciones y quitar `align_beats`, `align_beats_dp`, `refine_local` y `onset_error` cuando la híbrida esté validada en el juego.
 
@@ -79,4 +83,29 @@ Conclusiones:
 1. **Compases vacíos al principio** (count-in) desplazaban la DTW de armonía → corregido: la DTW solo usa el tramo entre la primera y la última nota.
 2. **La preferencia "la primera nota coincide con el inicio del audio" era un sobreajuste a MoP** → sustituida por una restricción que siempre es cierta (ninguna nota antes de que suene el audio).
 3. **Música repetitiva (ciclos de acordes iguales): la DTW se salta ciclos enteros** (Deep Blue Something: −2 compases entre el compás 11 y el 31; Machine Head: segundos de error). El paso fino (±2,5 beats) no llega a corregirlo. **Pendiente:** imponer un tempo plausible, ya sea limitando la pendiente de la DTW o con una búsqueda amplia y un modelo de tempo de segundo orden, y volver a medir con el banco.
-4. Pendiente de revisar: Joy Division y Mastodon (la mitad de los compases a más de ½ beat) y Queensrÿche (p90 de 1,1 s).
+   **Resuelto** con la DP de tempo (ver Método actual).
+4. **Sesgo de la croma:** la etapa gruesa colocaba todo entre 100 y 300 ms tarde en todas las canciones → croma sin suavizar y retraso compensado.
+5. **El paso fino se iba a ±1 beat** en tramos de ritmo ambiguo, aunque la etapa gruesa acertara (Joy Division) → ancla.
+6. **La restricción de inicio con `inf` colapsaba la DP fina** (Queensrÿche, −2 beats en toda la canción) → penalización finita.
+7. **Fallo del banco:** algunos charts marcan los compases de 7/8 con un beat por corchea. El banco los contaba como negras y el compás duraba el doble → ahora cuenta las unidades de ½ (Queensrÿche y Yes). Los intervalos largos (×2) no se tocan: pueden ser ritardandos.
+
+### Probado y descartado
+- **Ataques en la emisión de la DP de tempo:** desplaza canciones enteras varios beats (Joy Division −3 s, Machine Head +1,5 s). Sin el radio corto del paso fino, los riffs repetitivos encajan igual de bien desplazados.
+- **Tempo más rígido** (peso 0,02–1,0, o salto de 3): empeora Machine Head, Mastodon y Lively Ones, que tienen variaciones de tempo reales.
+
+### Resultados de esta sesión
+| Versión | Desarrollo: mediana / >½ beat / bien | Validación: mediana / >½ beat / bien |
+|---|---|---|
+| Partida (`aacdc94`, DTW + suavizado) | 17 ms / 25,7 % / 4 de 12 | 29 ms / 30,0 % / 3 de 12 |
+| DP de tempo (frames de 100 ms) + inicio finito | 11 ms / 5,8 % / 7 de 12 | — |
+| + rejilla de 25 ms, croma compensada, ancla 0,3 | 10 ms / 1,9 % / 10 de 12 | — |
+| + banco con compases en corcheas | **10 ms / 1,2 % / 11 de 12** | **14 ms / 6,7 % / 10 de 12** |
+
+La validación se ejecutó una sola vez, con el algoritmo final. La mejora se generaliza (30 % → 6,7 %), pero queda una diferencia con desarrollo debida a dos canciones.
+
+### Fallos que quedan (no corregidos, para no ajustar con la validación)
+- **Mastodon (desarrollo, 6 %):** compases 128–150, donde la tab casi no tiene notas (5 de 20 compases, notas sueltas). El tempo real es constante y la DP deriva ±5 % porque nada la sujeta.
+- **Queen – Love of My Life (validación, 29 %):** la etapa gruesa acierta (±0,3 beats) y el paso fino se va a +1 beat en tramos acústicos lentos (beats de ~780 ms). Es el mismo fallo que tenía Joy Division: el ancla 0,3 no basta. Idea general: que la fuerza del ancla dependa de lo clara que sea la emisión del paso fino, o limitar el radio del paso fino en milisegundos además de en beats.
+- **Yes – I've Seen All Good People (validación, 43 %):** la etapa gruesa tiene un desfase casi constante de +1,5 a +2,8 beats durante 90 compases de la parte acústica con voces. La armonía es ambigua a ±2 beats y el paso fino no llega.
+- Rendimiento: ~20–30 s por canción en la DP de tempo. Memoria de los punteros de retroceso: compases × 41 × (duración / 25 ms) bytes, unos 350 MB para los 8,5 min de MoP. Si molesta, limitar la ventana temporal de cada compás.
+
