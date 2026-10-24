@@ -115,3 +115,37 @@ let exportTimeline (path: string) (outJson: string) =
                masterbar_of_bar = order |})
     File.WriteAllText(outJson, json)
     printfn "Timeline: %d compases, %d notas, %.1f s -> %s" order.Length notes.Count (starts[starts.Count - 1] / 1000.0) outJson
+
+/// Información de la partitura y sus pistas en JSON, para que la CLI elija pistas y metadatos.
+let inspectJson (path: string) =
+    let s = load path
+    let order = playbackOrder s
+    let tracks =
+        [ for t in s.Tracks do
+              let st = t.Staves[0]
+              let beats =
+                  [ for i in order do
+                        for v in st.Bars[i].Voices do
+                            for b in v.Beats do
+                                let n = b.Notes |> Seq.filter (fun n -> not n.IsTieDestination) |> Seq.length
+                                if n > 0 then yield b, n ]
+              let frets = beats |> List.collect (fun (b, _) -> b.Notes |> Seq.map (fun n -> float n.Fret) |> List.ofSeq)
+              {| index = int t.Index
+                 name = t.Name
+                 program = int t.PlaybackInfo.Program
+                 strings = st.StringTuning.Tunings.Count
+                 tuning = st.StringTuning.Tunings |> Seq.map int |> Seq.rev |> Seq.toArray
+                 is_percussion = st.StringTuning.Tunings.Count = 0
+                 single_notes = beats |> List.filter (fun (_, n) -> n = 1) |> List.length
+                 chords = beats |> List.filter (fun (_, n) -> n > 1) |> List.length
+                 mean_fret = (if frets.IsEmpty then 0.0 else List.average frets)
+                 max_fret = (if frets.IsEmpty then 0.0 else List.max frets)
+                 bars_with_notes =
+                    order |> List.filter (fun i -> st.Bars[i].Voices |> Seq.exists (fun v -> v.Beats |> Seq.exists (fun b -> b.Notes.Count > 0))) |> List.length |} ]
+    let info =
+        {| title = s.Title
+           artist = s.Artist
+           album = s.Album
+           bars = order.Length
+           tracks = tracks |}
+    System.Text.Json.JsonSerializer.Serialize(info)

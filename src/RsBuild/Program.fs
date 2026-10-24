@@ -47,6 +47,9 @@ let private usage () =
 let main argv =
     Console.OutputEncoding <- Text.Encoding.UTF8
     match argv with
+    | [| "inspect-json"; tab |] ->
+        printfn "%s" (GpImport.inspectJson (Path.GetFullPath tab))
+        0
     | [| "inspect"; tab |] ->
         GpImport.inspect (Path.GetFullPath tab)
         0
