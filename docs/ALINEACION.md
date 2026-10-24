@@ -1,6 +1,6 @@
 # Alineación tab ↔ audio: diagnóstico y plan
 
-**Estado (24/10/2026, 2.ª sesión):** `cdlc build` usa la **alineación híbrida** (`align_hybrid`) con **DP de tempo** en la etapa gruesa. Banco: desarrollo 1,2 % de compases a más de ½ beat (11/12 canciones bien); validación 6,7 % (10/12). **Validado en el juego** (MoP y SNA, 24/10/2026).
+**Estado (24/10/2026, 2.ª sesión):** `cdlc build` usa la **alineación híbrida** (`align_hybrid`) con **DP de tempo** en la etapa gruesa. Banco: desarrollo 1,2 % de compases a más de ½ beat (11/12 canciones bien); validación 6,7 % (10/12). **Validado en el juego** (MoP y SNA, 24/10/2026). Después, el usuario vio que el **final de SNA se desincronizaba**: la grabación tiene un ciclo del riff (~4 s) que la tab no tiene, y la DP de tempo, que encadena los compases sin huecos, adelantaba todo lo posterior (terminaba en 230,6 s; la música, en 235). Arreglado con los huecos (punto 4 del método); queda en 234,4 s. Desplegado `rsTheWhSeven_v8`, pendiente de probar.
 
 **Master of Puppets con el método nuevo** (tab ver 7, ventanas de 10 s frente a Nacholede): mediana 10 ms, 0 % de ventanas > 100 ms, 49/49 ventanas fiables. Corrige la intro (+210 → −30 ms) y el final (−2.850 → +30 ms) del método anterior. Tarda 118 s (antes 60). El pico de memoria, 2,8 GB, es el mismo de antes y viene de la DTW completa de `chroma_warp`, que ahora solo da el tempo global: se puede sustituir por algo barato (repitiendo el banco).
 **Seven Nation Army:** coincide con la rejilla validada (mediana 9 ms, máximo 48 ms). La híbrida anterior se separaba hasta 4,7 s en los últimos 18 compases.
@@ -15,7 +15,9 @@ Desplegados para probar: `rsMetalMaste_v2_p.psarc` y `rsTheWhSeven_v7_p.psarc`.
 3. **Paso fino por programación dinámica:** cada compás se desplaza hasta ±2,5 beats sobre la curva gruesa. Emisión = golpes de batería de la tab según su tipo (bombo → graves, caja → medios, platos → agudos) más guitarras y bajo con poco peso. El coste de cambiar el desplazamiento entre compases es cuadrático. Envolventes compensadas 40 ms por el retraso del pico de onset.
    Además, **armonía fina**: cada compás se divide en 4 trozos y se compara la croma de la tab en cada trozo con la croma CQT del audio en el intervalo correspondiente (peso ×3). Resuelve los pasajes de acordes sueltos con silencios (F5/E5 en 1:50, 3:10 y 7:40), donde la batería sola se desplazaba dos beats.
    **Ancla** a la curva gruesa: 0,3 × (desplazamiento en beats)². Sin ella, en tramos de ritmo ambiguo se iba a ±1 beat. Barrido: 0,1 → 3,4 %, 0,3 → 1,9 %, 1,0 → 3,3 %.
-4. Restricción de inicio también en el paso fino, con **penalización finita**. Con `inf`, si ningún desplazamiento la cumplía, todos los costes eran `inf` y el `argmin` devolvía el índice 0: toda la canción quedaba desplazada −2,5 beats.
+4. **Huecos** (audio que no está en la tab). La DP de tempo admite, entre dos compases, un tramo de audio sin tab con coste 0,2: un estado de "espera" (mínimo acumulado del coste) con 2 bits por estado para el retroceso. Se calculan dos hipótesis, con los huecos propuestos y sin ninguno, y decide el **coste del paso fino**, que ve los ataques. La croma sola aceptaba huecos falsos: en el outro de MoP colocaba los acordes finales sobre la resonancia que se apaga. RsBuild recibe `bar_ends_ms`: el compás anterior al hueco dura lo normal, el hueco queda sin notas con beats al mismo tempo, y el informe lo avisa.
+   También: ninguna nota después del final del audio, y los frames a más de 50 dB por debajo del máximo no tienen croma (el ruido de fondo normalizado se parecía a cualquier cosa).
+5. Restricción de inicio también en el paso fino, con **penalización finita**. Con `inf`, si ningún desplazamiento la cumplía, todos los costes eran `inf` y el `argmin` devolvía el índice 0: toda la canción quedaba desplazada −2,5 beats.
 
 Resultados del método anterior (DTW + suavizado; ventanas de 10 s frente a Nacholede): tab nueva → mediana 10 ms, 0 % de ventanas > 300 ms. Tab antigua → mediana 20 ms, 27 % > 300 ms (en las partes donde la tab no coincide con la grabación). Seven Nation Army: coincide con la rejilla validada (11 ms) salvo en el final, donde la híbrida acierta el fin de la música (235 s frente a 230 s).
 
@@ -103,6 +105,18 @@ Conclusiones:
 | + banco con compases en corcheas | **10 ms / 1,2 % / 11 de 12** | **14 ms / 6,7 % / 10 de 12** |
 
 La validación se ejecutó una sola vez, con el algoritmo final. La mejora se generaliza (30 % → 6,7 %), pero queda una diferencia con desarrollo debida a dos canciones.
+
+### Huecos (estructura distinta entre tab y grabación)
+El banco no lo detectaba: su "tab" sale del propio chart y tiene siempre la estructura exacta. `bench/run.py --quitar 2` quita 2 compases de la tab hacia el 60 % de la canción (el audio los conserva).
+| Versión | Normal: >½ beat / bien | 2 compases quitados: >½ beat / bien |
+|---|---|---|
+| Sin huecos | 1,2 % / 11 de 12 | 20,6 % / 1 de 12 |
+| Huecos (coste 0,2) decididos por la croma | 1,9 % / 11 de 12 (2 falsos) | 8,9 % / 8 de 12 |
+| **Huecos decididos por el paso fino** | **1,7 % / 11 de 12** (1 falso: Mastodon, 18,75 s en el c22) | **8,9 % / 8 de 12** |
+
+Probado y descartado: subir el coste del hueco o hacerlo proporcional a su duración (SNA y MoP cambian a la vez, entre 0,3 y 0,5; con 0,05/s deja de detectar los huecos reales), y penalizar el audio fuerte después de la última nota (empeora el banco normal a 3,4 %, porque muchas grabaciones siguen sonando tras la última nota de guitarra).
+Validación y MoP: idénticos, sin huecos.
+Cuál de las repeticiones es la que falta no se puede saber en un riff que se repite igual: en SNA el hueco queda antes del c89.
 
 ### Fallos que quedan (no corregidos, para no ajustar con la validación)
 - **Mastodon (desarrollo, 6 %):** compases 128–150, donde la tab casi no tiene notas (5 de 20 compases, notas sueltas). El tempo real es constante y la DP deriva ±5 % porque nada la sujeta.
