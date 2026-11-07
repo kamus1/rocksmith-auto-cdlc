@@ -61,6 +61,7 @@ let private usage () =
     eprintfn "                --artist A --title T [--album A] [--year Y] [--cover C] [--preview-ms P] [--tone J]"
     eprintfn "                [--tones-lead \"clean=J|distortion=J\"] [--tones-rhythm ...]   (un tono por sonido de la pista)"
     eprintfn "                [--dlc-dir D]   (versión siguiente a las de D, en el título y en el nombre del archivo)"
+    eprintfn "                [--variant V]   (variante: va en el título y en la clave, convive con la versión normal)"
     eprintfn "  RsBuild tones <carpeta_dlc> <salida>     (extrae tonos de guitarra de los .psarc)"
     eprintfn "  RsBuild pack <proyecto.rs2dlc> <salida_sin_extension>"
     2
@@ -157,9 +158,10 @@ let main argv =
               Package.Title = opt "title" score.Title
               Package.Album = opt "album" score.Album
               Package.Year = int (opt "year" "0")
-              Package.Version = 0 }
+              Package.Version = 0
+              Package.Variant = opt "variant" "" }
         // Versión: la siguiente a las que haya en la carpeta del juego (--dlc-dir); va en el título y en el archivo
-        let dlcKey = Rocksmith2014.DLCProject.DLCKey.create "rsbuild" info.Artist info.Title
+        let dlcKey = Package.dlcKeyOf info
         let version = Package.nextVersion (opt "dlc-dir" "") dlcKey
         let info = { info with Version = version }
         let previewMs = float (opt "preview-ms" (string (min 60000 (songLengthMs / 3))))

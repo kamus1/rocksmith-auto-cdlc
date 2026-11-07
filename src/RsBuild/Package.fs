@@ -16,7 +16,21 @@ type SongInfo =
       Album: string
       Year: int
       /// Versión que se muestra en el título, " (vN)"; 0 = sin versión. La clave del DLC sale del título sin ella.
-      Version: int }
+      Version: int
+      /// Variante ("Lead en Guitar 1"…): va en el título y en la clave, para que conviva con la versión normal
+      Variant: string }
+
+/// Clave del DLC: la de DLC Builder (artista y título) más, si hay variante, sus primeras letras.
+let dlcKeyOf (info: SongInfo) =
+    let key = DLCKey.create "rsbuild" info.Artist info.Title
+    let v: string = Rocksmith2014.DLCProject.StringValidator.dlcKey (if isNull info.Variant then "" else info.Variant)
+    if v.Length = 0 then key else key + v.Substring(0, min 5 v.Length)
+
+/// Título que se ve en el juego: título, [variante] y (vN).
+let displayTitle (info: SongInfo) =
+    let v = if String.IsNullOrWhiteSpace info.Variant then "" else $" [{info.Variant.Trim()}]"
+    let n = if info.Version > 0 then $" (v{info.Version})" else ""
+    info.Title + v + n
 
 /// Siguiente versión de un DLC en la carpeta del juego: 1 + la mayor <clave>_vN_p.psarc que haya.
 let nextVersion (dlcDir: string) (dlcKey: string) =
@@ -75,7 +89,7 @@ type ArrangementSpec =
 /// Escribe el proyecto .rs2dlc (formato de DLC Builder). Devuelve su ruta.
 let writeProject (dir: string) (info: SongInfo) (arrangements: ArrangementSpec list) (wav: string) (previewWav: string)
                  (previewStartMs: float) (cover: string) =
-    let dlcKey = DLCKey.create "rsbuild" info.Artist info.Title
+    let dlcKey = dlcKeyOf info
     // Un tono por clave distinta; clave y nombre deben coincidir con BaseTone/Tones de los arrangements
     let tones =
         arrangements |> List.collect (fun a -> a.Tones) |> List.distinctBy fst
@@ -110,7 +124,7 @@ let writeProject (dir: string) (info: SongInfo) (arrangements: ArrangementSpec l
     project["Version"] <- JsonValue.Create "1"
     project["DLCKey"] <- JsonValue.Create dlcKey
     project["ArtistName"] <- sortable info.Artist
-    project["Title"] <- sortable (if info.Version > 0 then $"{info.Title} (v{info.Version})" else info.Title)
+    project["Title"] <- sortable (displayTitle info)
     project["AlbumName"] <- sortable info.Album
     project["Year"] <- JsonValue.Create info.Year
     project["AlbumArtFile"] <- JsonValue.Create(rel cover)

@@ -16,20 +16,20 @@ import sys
 from pathlib import Path
 
 from . import pipeline
-from .pipeline import DLC_DIR, TONE_CATEGORIES, PipelineError
+from .pipeline import TONE_CATEGORIES, PipelineError
 
 
 def cmd_build(a: argparse.Namespace) -> None:
     opts = pipeline.BuildOptions(
         audio=Path(a.audio), tab=Path(a.tab), lead=a.lead, rhythm=a.rhythm, no_rhythm=a.no_rhythm,
         artist=a.artist, title=a.title, album=a.album, year=a.year, cover=a.cover, tone=a.tone,
-        name=a.name, pad=a.pad, deploy=not a.no_deploy, lookup=not a.no_lookup)
+        name=a.name, variant=a.variant, pad=a.pad, deploy=not a.no_deploy, lookup=not a.no_lookup)
     pipeline.build_song(opts, on_step=lambda n, title: print(f"[{n}/{pipeline.STEPS}] {title}", flush=True),
                         on_log=lambda line: print(f"      {line}", flush=True))
 
 
 def cmd_tones(a: argparse.Namespace) -> None:
-    print(pipeline.build_tones(Path(a.dlc)))
+    print(pipeline.build_tones(Path(a.dlc) if a.dlc else None))
 
 
 def cmd_inspect(a: argparse.Namespace) -> None:
@@ -71,13 +71,14 @@ def main(argv: list[str] | None = None) -> None:
     b.add_argument("--tone", help=f"archivo de tono o categoría ({', '.join(TONE_CATEGORIES)}); "
                                   "por defecto: misma canción o mismo artista de la biblioteca")
     b.add_argument("--name", help="nombre de la carpeta en build/")
+    b.add_argument("--variant", help="variante: va en el título y convive con la versión normal (p. ej. \"Lead Guitar 1\")")
     b.add_argument("--pad", type=float, default=4.0, help="segundos de silencio al inicio (count-in)")
     b.add_argument("--no-deploy", action="store_true", help="no copiar a la carpeta dlc del juego")
     b.add_argument("--no-lookup", action="store_true", help="no buscar álbum, año y portada en iTunes")
     b.set_defaults(func=cmd_build)
 
     t = sub.add_parser("tones", help="extrae la biblioteca de tonos de los CDLC instalados")
-    t.add_argument("--dlc", default=str(DLC_DIR))
+    t.add_argument("--dlc", default=None, help="carpeta dlc/ (por defecto, la de config.json o la de Steam)")
     t.set_defaults(func=cmd_tones)
 
     i = sub.add_parser("inspect", help="muestra pistas, afinaciones y compases de la tab")

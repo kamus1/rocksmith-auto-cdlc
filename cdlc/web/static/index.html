@@ -7,92 +7,152 @@
 <link rel="stylesheet" href="/static/style.css">
 </head>
 <body>
-<header>
-  <h1>Generador de CDLC <span class="sub">tab de Guitar Pro + audio → Rocksmith 2014</span></h1>
-  <nav>
+<header class="top">
+  <div class="top-row">
+    <a class="brand" href="#" data-view="new">
+      <svg class="logo" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2c4.4 0 8 2.6 8 6.4 0 4.6-4.6 10.9-7.1 13.1a1.4 1.4 0 0 1-1.8 0C8.6 19.3 4 13 4 8.4 4 4.6 7.6 2 12 2Z"/></svg>
+      <span>Generador de CDLC</span>
+      <span class="brand-sub">Guitar Pro + audio → Rocksmith 2014</span>
+    </a>
+    <button class="status-pill" id="status-pill" data-view="settings" title="Estado del entorno">
+      <span class="dot"></span><span class="label">Comprobando…</span>
+    </button>
+  </div>
+  <nav class="tabs" aria-label="Secciones">
     <button class="tab active" data-view="new">Nueva canción</button>
     <button class="tab" data-view="songs">Mis canciones</button>
-    <button class="tab" data-view="env">Entorno</button>
+    <button class="tab" data-view="settings">Ajustes</button>
   </nav>
 </header>
-
-<div id="warnings"></div>
 
 <main>
   <!-- Nueva canción -->
   <section id="view-new" class="view active">
-    <div class="drops">
-      <label class="drop" id="drop-tab">
-        <input type="file" id="file-tab" accept=".gp,.gpx,.gp3,.gp4,.gp5,.gp7">
-        <strong>1. Tab de Guitar Pro</strong>
-        <span class="hint">.gp, .gpx, .gp3–.gp5 — arrastra o haz clic</span>
-        <span class="chosen" id="chosen-tab"></span>
-      </label>
-      <label class="drop" id="drop-audio">
-        <input type="file" id="file-audio" accept="audio/*,.mp3,.wav,.flac,.ogg,.m4a">
-        <strong>2. Audio</strong>
-        <span class="hint">mp3, wav, flac, ogg, m4a</span>
-        <span class="chosen" id="chosen-audio"></span>
-      </label>
+    <div class="page-head">
+      <h1>Nueva canción</h1>
+      <p class="muted">Sube la tab y el audio. La alineación, los acordes, los tonos y el empaquetado son automáticos.</p>
+    </div>
+
+    <div class="card">
+      <div class="card-head"><span class="step">1</span><h2>Archivos</h2></div>
+      <div class="drops">
+        <label class="drop" id="drop-tab">
+          <input type="file" id="file-tab" accept=".gp,.gpx,.gp3,.gp4,.gp5,.gp7">
+          <svg viewBox="0 0 24 24" class="ico"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg>
+          <span class="drop-title">Tab de Guitar Pro</span>
+          <span class="drop-hint">.gp · .gpx · .gp3–.gp5 — arrastra o haz clic</span>
+          <span class="drop-file" id="chosen-tab"></span>
+        </label>
+        <label class="drop" id="drop-audio">
+          <input type="file" id="file-audio" accept="audio/*,.mp3,.wav,.flac,.ogg,.m4a">
+          <svg viewBox="0 0 24 24" class="ico"><path d="M2 10v4M6 6v12M10 3v18M14 8v8M18 5v14M22 10v4"/></svg>
+          <span class="drop-title">Audio de la canción</span>
+          <span class="drop-hint">mp3 · wav · flac · ogg · m4a</span>
+          <span class="drop-file" id="chosen-audio"></span>
+        </label>
+      </div>
     </div>
 
     <div id="setup" hidden>
-      <h2>Pistas</h2>
-      <p class="hint" id="auto-desc"></p>
-      <div class="table-wrap">
-        <table id="tracks">
-          <thead><tr><th>Pista</th><th>Cuerdas</th><th>Afinación</th><th>Notas</th><th>Acordes</th>
-            <th>Compases</th><th>Instrumento</th><th>Sonidos</th><th>Lead</th><th>Rhythm</th></tr></thead>
-          <tbody></tbody>
-        </table>
+      <div class="card">
+        <div class="card-head"><span class="step">2</span><h2>Pistas</h2><span class="muted small" id="auto-desc"></span></div>
+        <div class="table-wrap">
+          <table id="tracks">
+            <thead><tr><th>Pista</th><th class="c">Cuerdas</th><th>Afinación</th><th class="r">Notas</th><th class="r">Acordes</th>
+              <th class="r">Compases</th><th>Instrumento</th><th>Sonidos</th><th class="c">Lead</th><th class="c">Rhythm</th></tr></thead>
+            <tbody></tbody>
+          </table>
+        </div>
+        <label class="check"><input type="radio" name="rhythm" value="none"> Sin arrangement Rhythm</label>
       </div>
-      <label class="inline"><input type="radio" name="rhythm" value="none"> Sin arrangement Rhythm</label>
 
-      <h2>Datos de la canción</h2>
-      <div class="grid">
-        <label>Artista <input id="m-artist"></label>
-        <label>Título <input id="m-title"></label>
-        <label>Álbum <input id="m-album" placeholder="se busca en iTunes si está vacío"></label>
-        <label>Año <input id="m-year" inputmode="numeric" placeholder="se busca en iTunes"></label>
-        <label>Tono
-          <select id="m-tone"><option value="">Automático (misma canción, artista o instrumento)</option></select>
-        </label>
-        <label>Portada <input type="file" id="m-cover" accept="image/png,image/jpeg"></label>
+      <div class="card">
+        <div class="card-head"><span class="step">3</span><h2>Detalles</h2></div>
+        <div class="grid">
+          <label class="field">Artista <input id="m-artist" autocomplete="off"></label>
+          <label class="field">Título <input id="m-title" autocomplete="off"></label>
+          <label class="field">Álbum <input id="m-album" placeholder="Se busca en iTunes si está vacío"></label>
+          <label class="field">Año <input id="m-year" inputmode="numeric" placeholder="Se busca en iTunes"></label>
+          <label class="field">Tono
+            <select id="m-tone"><option value="">Automático (sigue los cambios de la tab)</option></select>
+          </label>
+          <label class="field">Variante <span class="opt">opcional</span>
+            <input id="m-variant" placeholder="p. ej. Lead Guitar 1" autocomplete="off">
+            <span class="help">Con variante, la canción convive en el juego con la versión normal.</span>
+          </label>
+          <label class="field span2">Portada <span class="opt">opcional</span><input type="file" id="m-cover" accept="image/png,image/jpeg"></label>
+        </div>
       </div>
-      <label class="inline"><input type="checkbox" id="m-lookup" checked> Buscar álbum, año y portada en iTunes</label>
-      <label class="inline"><input type="checkbox" id="m-deploy" checked> Copiar a la carpeta <code>dlc/</code> del juego</label>
-      <div class="actions"><button id="btn-build" class="primary" disabled>Generar</button></div>
+
+      <div class="card">
+        <div class="card-head"><span class="step">4</span><h2>Opciones</h2></div>
+        <label class="switch"><input type="checkbox" id="m-lookup" checked><span class="track"></span>
+          <span><strong>Buscar álbum, año y portada</strong><span class="muted small block">En iTunes, si faltan en la tab.</span></span></label>
+        <label class="switch"><input type="checkbox" id="m-deploy" checked><span class="track"></span>
+          <span><strong>Copiar al juego</strong><span class="muted small block" id="deploy-dir">A la carpeta dlc/ de Rocksmith.</span></span></label>
+        <div class="card-foot">
+          <span class="muted small" id="build-hint">Elige la tab y el audio para empezar.</span>
+          <button id="btn-build" class="btn primary" disabled>Generar</button>
+        </div>
+      </div>
     </div>
 
-    <div id="progress" hidden>
-      <h2>Progreso</h2>
-      <ol id="steps"></ol>
+    <div id="progress" class="card" hidden>
+      <div class="card-head"><h2>Progreso</h2><span class="muted small mono" id="elapsed"></span></div>
+      <ol id="steps" class="steps"></ol>
       <div id="result"></div>
-      <details id="log-box"><summary>Log</summary><pre id="log"></pre></details>
+      <details id="log-box" class="log"><summary>Log</summary><pre id="log"></pre></details>
     </div>
   </section>
 
   <!-- Mis canciones -->
   <section id="view-songs" class="view">
+    <div class="page-head">
+      <h1>Mis canciones</h1>
+      <p class="muted">Lo que has generado, con su versión y si está en el juego.</p>
+    </div>
     <div id="song-list" class="cards"></div>
   </section>
 
-  <!-- Entorno -->
-  <section id="view-env" class="view">
-    <h2>Comprobaciones</h2>
-    <ul id="checks" class="checks"></ul>
-    <h2>Biblioteca de tonos</h2>
-    <p id="tone-summary" class="hint"></p>
-    <button id="btn-tones">Volver a extraer los tonos de los CDLC instalados</button>
-    <pre id="tones-log" hidden></pre>
+  <!-- Ajustes -->
+  <section id="view-settings" class="view">
+    <div class="page-head">
+      <h1>Ajustes</h1>
+      <p class="muted">Carpeta del juego, herramientas y biblioteca de tonos.</p>
+    </div>
+
+    <div class="card">
+      <div class="card-head"><h2>Carpeta del juego</h2></div>
+      <p class="muted small">La carpeta <code>dlc</code> de Rocksmith 2014, donde se copian las canciones.</p>
+      <div class="inline-form">
+        <input id="cfg-dlc" class="grow mono" spellcheck="false">
+        <button class="btn primary" id="cfg-save">Guardar</button>
+        <button class="btn" id="cfg-default">Usar la de Steam</button>
+      </div>
+      <p class="small" id="cfg-msg"></p>
+    </div>
+
+    <div class="card">
+      <div class="card-head"><h2>Entorno</h2></div>
+      <ul id="checks" class="checks"></ul>
+    </div>
+
+    <div class="card">
+      <div class="card-head"><h2>Biblioteca de tonos</h2></div>
+      <p class="muted small" id="tone-summary"></p>
+      <div><button class="btn" id="btn-tones">Volver a extraer los tonos de los CDLC instalados</button></div>
+      <pre id="tones-log" class="terminal" hidden></pre>
+    </div>
   </section>
 </main>
 
-<dialog id="report">
-  <form method="dialog"><button class="close" aria-label="Cerrar">×</button></form>
-  <pre id="report-text"></pre>
+<dialog id="report" class="sheet">
+  <div class="sheet-head"><h2 id="report-title">Informe</h2>
+    <form method="dialog"><button class="btn icon" aria-label="Cerrar">✕</button></form></div>
+  <pre id="report-text" class="terminal"></pre>
 </dialog>
 
+<div id="toast" class="toast" hidden></div>
 <script src="/static/app.js"></script>
 </body>
 </html>

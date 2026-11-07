@@ -19,7 +19,26 @@ from . import align, audio
 ROOT = Path(__file__).resolve().parent.parent
 RSBUILD = ROOT / "src" / "RsBuild" / "bin" / "Release" / "net10.0" / "RsBuild.dll"
 DOTNET = shutil.which("dotnet") or r"C:\Program Files\dotnet\dotnet.exe"
-DLC_DIR = Path(r"C:\Program Files (x86)\Steam\steamapps\common\Rocksmith2014\dlc")
+DEFAULT_DLC_DIR = Path(r"C:\Program Files (x86)\Steam\steamapps\common\Rocksmith2014\dlc")
+CONFIG_PATH = ROOT / "config.json"                  # ajustes del usuario (fuera de git)
+
+
+def load_config() -> dict:
+    try:
+        return json.loads(CONFIG_PATH.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+
+
+def save_config(**changes) -> dict:
+    cfg = {**load_config(), **changes}
+    CONFIG_PATH.write_text(json.dumps(cfg, indent=1, ensure_ascii=False), encoding="utf-8")
+    return cfg
+
+
+def dlc_dir() -> Path:
+    """Carpeta dlc/ de Rocksmith: la de config.json o, si no hay, la de Steam por defecto."""
+    return Path(load_config().get("dlc_dir") or DEFAULT_DLC_DIR)
 WINGET_LINKS = Path(os.environ.get("LOCALAPPDATA", "")) / "Microsoft" / "WinGet" / "Links"
 SUPPORTED_WWISE = re.compile(r"20(19|21|22|23)")
 TONES_DIR = ROOT / "build" / "tones"
@@ -286,12 +305,15 @@ def deploy(psarc: Path, on_log: Callable[[str], None] = print) -> Path:
     """
     key = re.sub(r"_v\d+_p\.psarc$", "", psarc.name)
     pattern = re.compile(rf"^{re.escape(key)}_v(\d+)_p\.psarc$")
-    old = [p for p in DLC_DIR.glob(f"{key}_v*_p.psarc") if pattern.match(p.name)]
+    target_dir = dlc_dir()
+    if not target_dir.is_dir():
+        raise PipelineError(f"No existe la carpeta del juego: {target_dir}. Elígela en Ajustes.")
+    old = [p for p in target_dir.glob(f"{key}_v*_p.psarc") if pattern.match(p.name)]
     # La versión del paquete (va en el título que se ve en el juego) si es nueva; si no, la siguiente libre
     own = re.search(r"_v(\d+)_p\.psarc$", psarc.name)
     version = max(max((int(pattern.match(p.name).group(1)) for p in old), default=0) + 1,
                   int(own.group(1)) if own else 0)
-    target = DLC_DIR / f"{key}_v{version}_p.psarc"
+    target = target_dir / f"{key}_v{version}_p.psarc"
     shutil.copy2(psarc, target)
     for p in old:
         try:
@@ -306,9 +328,9 @@ def inspect_tab(tab: Path) -> dict:
     return json.loads(rsbuild("inspect-json", str(Path(tab).resolve())))
 
 
-def build_tones(dlc: Path = DLC_DIR) -> str:
+def build_tones(dlc: Path | None = None) -> str:
     """Extrae la biblioteca de tonos de los CDLC instalados en build/tones."""
-    return rsbuild("tones", str(Path(dlc).resolve()), str(TONES_DIR)).strip()
+    return rsbuild("tones", str(Path(dlc or dlc_dir()).resolve()), str(TONES_DIR)).strip()
 
 
 COMMON_FRETS = 22                   # muchas guitarras tienen 21 o 22 trastes; Rocksmith admite hasta 24
@@ -354,6 +376,7 @@ class BuildOptions:
     cover: str | None = None
     tone: str | None = None             # archivo o categoría; None: automático
     name: str | None = None             # carpeta en build/
+    variant: str | None = None          # variante: título y clave propios, convive con la versión normal
     pad: float = 4.0                    # segundos de silencio al inicio (count-in)
     deploy: bool = True
     lookup: bool = True                 # álbum, año y portada desde iTunes
@@ -370,6 +393,7 @@ class BuildResult:
     tracks: str
     tone: str
     alignment: dict = field(default_factory=dict)
+    warnings: list[str] = field(default_factory=list)   # avisos para el usuario (también en el informe)
 
 
 def build_song(opts: BuildOptions, on_step: Callable[[int, str], None] = lambda n, t: None,
@@ -403,7 +427,7 @@ def build_song(opts: BuildOptions, on_step: Callable[[int, str], None] = lambda 
     else:
         lead, rhythm = opts.lead, (None if opts.no_rhythm else opts.rhythm)
         tracks_desc = f"Lead = pista {lead}" + (f", Rhythm = pista {rhythm}" if rhythm is not None else "")
-    out = ROOT / "build" / (opts.name or slug(f"{meta['artist']} {meta['title']}"))
+    out = ROOT / "build" / (opts.name or slug(f"{meta['artist']} {meta['title']} {opts.variant or ''}"))
     out.mkdir(parents=True, exist_ok=True)
     on_step(0, f"{meta['artist']} - {meta['title']} | {tracks_desc}")
 
@@ -436,8 +460,16 @@ def build_song(opts: BuildOptions, on_step: Callable[[int, str], None] = lambda 
                 f"compases con tempo raro: {len(r['suspicious_bars'])}")
     on_log(bpm_note)
     tl = json.loads((out / "timeline.json").read_text(encoding="utf-8"))
+    warnings = []
     if not any(n[2] < 0 for n in tl["notes"]):
-        on_log("AVISO: la tab no tiene batería; la alineación fina será menos precisa.")
+        warnings.append("La tab no tiene batería: la alineación fina puede ser menos precisa.")
+    for k, sec in r.get("gaps", []):
+        warnings.append(f"La grabación tiene {sec:.1f} s que no están en la tab antes del compás {k}: ese tramo queda sin notas.")
+    if r["suspicious_bars"]:
+        warnings.append(f"{len(r['suspicious_bars'])} compases con un tempo muy distinto del resto (pueden estar desfasados): "
+                        + ", ".join(f"c{k}" for k in r["suspicious_bars"][:12]) + ("…" if len(r["suspicious_bars"]) > 12 else ""))
+    for w in warnings:
+        on_log(f"AVISO: {w}")
 
     lead_program = next((t["program"] for t in info["tracks"] if t["index"] == lead), None)
     tone_path, tone_desc = resolve_tone(opts.tone, meta["artist"], meta["title"], lead_program)
@@ -467,8 +499,10 @@ def build_song(opts: BuildOptions, on_step: Callable[[int, str], None] = lambda 
             args += [f"--{key}", str(value)]
     if tone_path:
         args += ["--tone", str(tone_path)]
-    if DLC_DIR.is_dir():
-        args += ["--dlc-dir", str(DLC_DIR)]          # versión siguiente a las del juego, en el título
+    if dlc_dir().is_dir():
+        args += ["--dlc-dir", str(dlc_dir())]        # versión siguiente a las del juego, en el título
+    if opts.variant:
+        args += ["--variant", opts.variant]
     for kind, chosen in per_track_tones.items():
         args += [f"--tones-{kind}", "|".join(f"{c}={p}" for c, p in chosen.items())]
     log = rsbuild(*args, env=dict(os.environ, WWISEROOT=wwise))
@@ -481,11 +515,12 @@ def build_song(opts: BuildOptions, on_step: Callable[[int, str], None] = lambda 
     high = high_fret_notes(out / "pkg", r["bar_times_ms"])
     for line in high:
         on_log(f"AVISO: {line}")
+    warnings += high
 
     report = out / "pkg" / "report.md"
     with report.open("a", encoding="utf-8") as f:
-        if high:
-            f.write("\n## Avisos de la tab\n" + "".join(f"- {line}\n" for line in high))
+        if warnings:
+            f.write("\n## Avisos\n" + "".join(f"- {line}\n" for line in warnings))
         f.write(f"\n## Pistas\n- {tracks_desc}\n")
         f.write(f"\n## Tono\n- {tone_desc}\n")
         f.write(f"\n## Alineación\n- {bpm_note}\n")
@@ -503,4 +538,4 @@ def build_song(opts: BuildOptions, on_step: Callable[[int, str], None] = lambda 
         on_step(5, f"Sin copiar a dlc/: {psarc}")
     return BuildResult(out_dir=out, psarc=psarc, report=report, deployed=deployed,
                        cover=Path(meta["cover"]) if meta["cover"] else None, meta=meta,
-                       tracks=tracks_desc, tone=tone_desc, alignment=r)
+                       tracks=tracks_desc, tone=tone_desc, alignment=r, warnings=warnings)

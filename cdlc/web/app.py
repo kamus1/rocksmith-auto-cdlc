@@ -19,7 +19,7 @@ from fastapi.responses import FileResponse, PlainTextResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
 from .. import pipeline
-from ..pipeline import DLC_DIR, ROOT, TONE_CATEGORIES, TONES_DIR, PipelineError
+from ..pipeline import ROOT, TONE_CATEGORIES, TONES_DIR, PipelineError, dlc_dir
 
 STATIC = Path(__file__).resolve().parent / "static"
 UPLOADS = ROOT / "build" / "_uploads"
@@ -153,7 +153,7 @@ def inspect(tab: UploadFile = File(...)):
 def build(upload_id: str = Form(...), audio: UploadFile = File(...), lead: str = Form(""),
           rhythm: str = Form("auto"), tone: str = Form(""), artist: str = Form(""), title: str = Form(""),
           album: str = Form(""), year: str = Form(""), deploy: bool = Form(True), lookup: bool = Form(True),
-          cover: UploadFile | None = File(None)):
+          variant: str = Form(""), cover: UploadFile | None = File(None)):
     """Lanza el build. rhythm: "auto", "none" o el índice de la pista. lead vacío: automático."""
     folder = _upload_dir(upload_id)
     tab = folder / json.loads((folder / "tab.json").read_text(encoding="utf-8"))["file"]
@@ -169,7 +169,7 @@ def build(upload_id: str = Form(...), audio: UploadFile = File(...), lead: str =
             no_rhythm=rhythm == "none",
             artist=artist.strip() or None, title=title.strip() or None, album=album.strip() or None,
             year=int(year) if year.strip() else None, cover=str(cover_path) if cover_path else None,
-            tone=tone or None, deploy=deploy, lookup=lookup)
+            tone=tone or None, deploy=deploy, lookup=lookup, variant=variant.strip() or None)
     except ValueError:
         raise HTTPException(400, "Pista o año no válidos")
 
@@ -178,7 +178,8 @@ def build(upload_id: str = Form(...), audio: UploadFile = File(...), lead: str =
                                 on_log=lambda line: job.emit(type="log", line=line))
         return {"song": r.out_dir.name, "psarc": str(r.psarc), "deployed": str(r.deployed) if r.deployed else None,
                 "meta": {k: v for k, v in r.meta.items() if k != "cover"}, "tracks": r.tracks, "tone": r.tone,
-                "gaps": r.alignment.get("gaps", []), "suspicious_bars": len(r.alignment.get("suspicious_bars", []))}
+                "gaps": r.alignment.get("gaps", []), "suspicious_bars": len(r.alignment.get("suspicious_bars", [])),
+                "warnings": r.warnings, "version": _version(r.psarc.name)}
 
     job = start_job("build", work)
     return {"job_id": job.id}
@@ -200,10 +201,29 @@ def _psarc(d: Path) -> Path | None:
     return files[-1] if files else None
 
 
+def _version(name: str) -> int | None:
+    m = re.search(r"_v(\d+)_p\.psarc$", name)
+    return int(m.group(1)) if m else None
+
+
 def _deployed(psarc: Path) -> str | None:
     key = re.sub(r"_v\d+_p\.psarc$", "", psarc.name)
-    found = sorted(DLC_DIR.glob(f"{key}_v*_p.psarc")) if DLC_DIR.is_dir() else []
+    d = dlc_dir()
+    found = sorted(d.glob(f"{key}_v*_p.psarc"), key=lambda f: _version(f.name) or 0) if d.is_dir() else []
     return found[-1].name if found else None
+
+
+def _report_warnings(report: Path) -> list[str]:
+    """Líneas de la sección "## Avisos" del informe."""
+    if not report.exists():
+        return []
+    out, inside = [], False
+    for line in report.read_text(encoding="utf-8").splitlines():
+        if line.startswith("## "):
+            inside = line.strip() == "## Avisos"
+        elif inside and line.startswith("- "):
+            out.append(line[2:])
+    return out
 
 
 @app.get("/api/songs")
@@ -216,8 +236,9 @@ def songs():
         heading = report.read_text(encoding="utf-8").splitlines()[0].lstrip("# ").strip() if report.exists() else d.name
         artist, _, title = heading.partition(" - ")
         out.append({"name": d.name, "artist": artist, "title": title or heading, "psarc": psarc.name,
-                    "built": psarc.stat().st_mtime, "deployed": _deployed(psarc),
-                    "cover": (d / "cover.jpg").exists(), "report": report.exists()})
+                    "built": psarc.stat().st_mtime, "deployed": _deployed(psarc), "version": _version(psarc.name),
+                    "cover": (d / "cover.jpg").exists(), "report": report.exists(),
+                    "warnings": _report_warnings(report)})
     return sorted(out, key=lambda s: -s["built"])
 
 
@@ -226,10 +247,11 @@ def redeploy(name: str):
     psarc = _psarc(_song_dir(name))
     if psarc is None:
         raise HTTPException(404, "No hay .psarc")
-    if not DLC_DIR.is_dir():
-        raise HTTPException(400, f"No existe la carpeta del juego: {DLC_DIR}")
     logs = []
-    target = pipeline.deploy(psarc, logs.append)
+    try:
+        target = pipeline.deploy(psarc, logs.append)
+    except PipelineError as e:
+        raise HTTPException(400, str(e))
     return {"deployed": target.name, "log": logs}
 
 
@@ -284,13 +306,32 @@ def status():
          ".NET 10 SDK."),
         ("rsbuild", str(pipeline.RSBUILD) if pipeline.RSBUILD.exists() else None,
          "RsBuild compilado (dotnet build src/RsBuild -c Release); se compila solo la primera vez."),
-        ("dlc", str(DLC_DIR) if DLC_DIR.is_dir() else None, "Carpeta dlc/ de Rocksmith 2014."),
+        ("dlc", str(dlc_dir()) if dlc_dir().is_dir() else None,
+         f"Carpeta dlc/ de Rocksmith 2014 (no existe {dlc_dir()}): elígela en Ajustes."),
         ("tones", f"{len(_tone_index())} tonos" if _tone_index() else None,
          "Biblioteca de tonos: sin ella se usa un tono por defecto."),
     ]
     busy = next((j.id for j in JOBS.values() if not j.finished), None)
     return {"checks": [{"key": k, "ok": bool(v), "value": v, "help": h} for k, v, h in checks],
             "busy_job": busy}
+
+
+@app.get("/api/config")
+def get_config():
+    return {"dlc_dir": str(dlc_dir()), "default_dlc_dir": str(pipeline.DEFAULT_DLC_DIR),
+            "dlc_dir_ok": dlc_dir().is_dir()}
+
+
+@app.post("/api/config")
+def set_config(dlc_dir_path: str = Form(..., alias="dlc_dir")):
+    """Cambia la carpeta dlc/ del juego. Tiene que existir; vacío vuelve a la de Steam por defecto."""
+    path = dlc_dir_path.strip().strip('"')
+    if path and not Path(path).is_dir():
+        raise HTTPException(400, f"No existe la carpeta: {path}")
+    if path and not (Path(path).name.lower() == "dlc" or any(Path(path).glob("*.psarc"))):
+        raise HTTPException(400, "No parece la carpeta dlc/ de Rocksmith 2014 (no se llama dlc ni tiene .psarc).")
+    pipeline.save_config(dlc_dir=path or None)
+    return get_config()
 
 
 @app.get("/")

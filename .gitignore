@@ -4,3 +4,4 @@ build/
 samples/
 .venv/
 __pycache__/
+config.json
