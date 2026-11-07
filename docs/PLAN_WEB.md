@@ -1,6 +1,6 @@
 # Plan: interfaz web local
 
-**Estado:** pendiente. Escrito el 24/10/2026; no hay código hecho.
+**Estado:** paso 1 hecho (07/11/2026); pasos 2–4 en curso. Escrito el 24/10/2026.
 
 ## Objetivo
 Una web que **solo corre en el PC del usuario**: se arranca con `python -m cdlc web`, se abre en `http://127.0.0.1:8000` y solo escucha en localhost. Sustituye a la terminal para el uso diario y será la cara del proyecto cuando el repo sea público.
@@ -20,7 +20,9 @@ Tiene que ser local por tres motivos:
 
 ## Pasos
 
-### 1. Separar la lógica del build de la CLI
+### 1. Separar la lógica del build de la CLI — hecho
+`cdlc/pipeline.py` (`BuildOptions`, `build_song`, `BuildResult`, `PipelineError`, `inspect_tab`, `build_tones`). Seven Nation Army da exactamente los mismos tiempos de compás que la v8. Los errores de ffmpeg y de archivos que no existen dan un mensaje claro.
+
 - Mover de `cdlc/cli.py` a un módulo nuevo `cdlc/pipeline.py`: constantes, `find_wwise`, `rsbuild`, `resolve_tone`, `choose_tracks`, `lookup_song`, `download_cover`, `deploy` y el cuerpo de `cmd_build`.
 - Convertir `cmd_build` en `build_song(opts, on_step, on_log) -> BuildResult`:
   - `opts` es un dataclass con los mismos campos que los argumentos actuales.

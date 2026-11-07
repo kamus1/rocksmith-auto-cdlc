@@ -20,7 +20,7 @@ def to_wav(src: Path, dst: Path, pad_seconds: float = 0.0) -> Path:
     subprocess.run(
         [ffmpeg_exe(), "-y", "-loglevel", "error", "-i", str(src),
          "-af", afilter, "-ar", "48000", "-ac", "2", "-sample_fmt", "s16", str(dst)],
-        check=True,
+        check=True, capture_output=True,
     )
     return dst
 
