@@ -46,6 +46,27 @@ HOP_CHROMA_S = 0.1
 KICK = {35, 36}
 SNARE = {37, 38, 39, 40, 31, 33, 34}
 HIGH = {42, 44, 46, 49, 51, 52, 53, 55, 57, 59, 29, 30}
+# Cuenta de entrada típica de una tab: baquetas, aro o charles, sin bombo ni caja
+COUNT_IN = {31, 33, 37, 42, 44, 46}
+
+
+def count_in_bars(tl: dict) -> int:
+    """Compases iniciales que son solo cuenta de entrada: antes de la primera nota con altura y solo con
+    golpes de COUNT_IN. Muchas grabaciones no la tienen (la canción arranca con el riff) y, si se intenta
+    casar, arrastra los primeros compases. Si la grabación sí la tiene, perderla no cuesta nada: el compás
+    siguiente ya tiene notas."""
+    st = tl["bar_starts_ms"]
+    pitched = [t for t, _d, midi, _tr in tl["notes"] if midi >= 0]
+    if not pitched:
+        return 0
+    first = min(pitched)
+    k = 0
+    while k + 1 < len(st) and st[k + 1] <= first:
+        drums = [-midi for t, _d, midi, _tr in tl["notes"] if st[k] <= t < st[k + 1] and midi < 0]
+        if drums and not set(drums) <= COUNT_IN:
+            break
+        k += 1
+    return k
 
 
 def _tab_chroma(tl: dict, n_frames: int) -> np.ndarray:
@@ -334,6 +355,9 @@ def align_hybrid(timeline_json: Path, wav: Path, out_json: Path, radius_beats: f
     tl = json.loads(timeline_json.read_text(encoding="utf-8"))
     st = np.array(tl["bar_starts_ms"])
     lens = np.array(tl["bar_quarters"], dtype=float)
+    n_count_in = count_in_bars(tl)
+    if n_count_in:
+        tl["notes"] = [nt for nt in tl["notes"] if nt[0] >= st[n_count_in]]
     n = len(lens)
     y, _ = librosa.load(str(wav), sr=SR, mono=True)
 
@@ -459,6 +483,8 @@ def align_hybrid(timeline_json: Path, wav: Path, out_json: Path, radius_beats: f
         "tempo_ratio_median": round(med, 4),
         "suspicious_bars": [int(k + 1) for k, x in enumerate(ratio) if abs(x / med - 1) > 0.1],
         "method": "hybrid",
+        # Compases iniciales tratados como cuenta de entrada (sin notas con altura, solo baquetas o charles)
+        "count_in_bars": n_count_in,
         # Audio que no está en la tab: (compás, 1-based, que empieza tras el hueco; segundos)
         "gaps": [(int(k + 1), round(float(sec), 2)) for k, sec in gaps],
         "mean_abs_offset_ms": round(float(np.mean(np.abs(off))), 1),
