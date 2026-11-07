@@ -6,6 +6,7 @@ Uso:
                        [--tone categoría|archivo] [--cover img] [--name carpeta] [--no-deploy] [--no-lookup]
   python -m cdlc tones
   python -m cdlc inspect --tab cancion.gp
+  python -m cdlc web [--port 8000] [--no-browser]
 
 La lógica está en pipeline.py; aquí solo se leen los argumentos y se imprime el progreso.
 """
@@ -33,6 +34,20 @@ def cmd_tones(a: argparse.Namespace) -> None:
 
 def cmd_inspect(a: argparse.Namespace) -> None:
     print(pipeline.rsbuild("inspect", str(Path(a.tab).resolve())))
+
+
+def cmd_web(a: argparse.Namespace) -> None:
+    import threading
+    import webbrowser
+
+    import uvicorn
+
+    url = f"http://127.0.0.1:{a.port}"
+    print(f"Web local en {url} (Ctrl+C para salir)")
+    if not a.no_browser:
+        threading.Timer(1.5, webbrowser.open, [url]).start()
+    # Solo localhost: necesita Wwise y la carpeta dlc/ de este PC, y no debe exponerse a la red
+    uvicorn.run("cdlc.web.app:app", host="127.0.0.1", port=a.port, log_level="warning")
 
 
 def main(argv: list[str] | None = None) -> None:
@@ -68,6 +83,11 @@ def main(argv: list[str] | None = None) -> None:
     i = sub.add_parser("inspect", help="muestra pistas, afinaciones y compases de la tab")
     i.add_argument("--tab", required=True)
     i.set_defaults(func=cmd_inspect)
+
+    w = sub.add_parser("web", help="abre la interfaz web local (http://127.0.0.1:8000)")
+    w.add_argument("--port", type=int, default=8000)
+    w.add_argument("--no-browser", action="store_true", help="no abrir el navegador")
+    w.set_defaults(func=cmd_web)
 
     a = p.parse_args(argv)
     try:

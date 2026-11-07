@@ -14,6 +14,7 @@ dotnet build src/RsBuild -c Release
 
 .venv\Scripts\python -m cdlc inspect --tab cancion.gp          # ver pistas y afinaciones
 .venv\Scripts\python -m cdlc tones                             # biblioteca de tonos desde los CDLC instalados
+.venv\Scripts\python -m cdlc web                               # interfaz web local en http://127.0.0.1:8000
 .venv\Scripts\python -m cdlc build --audio cancion.mp3 --tab cancion.gp --lead 0 [--rhythm 1] \
     --artist "..." --title "..." [--album ... --year ...] [--tone distortion]
 ```

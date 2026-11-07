@@ -1,6 +1,6 @@
 # Plan: interfaz web local
 
-**Estado:** paso 1 hecho (07/11/2026); pasos 2–4 en curso. Escrito el 24/10/2026.
+**Estado (07/11/2026):** pasos 1–3 hechos (`python -m cdlc web`). Falta la parte de la verificación (paso 4) que necesita el juego y el navegador: un build desplegado desde la página y probado en Rocksmith. Escrito el 24/10/2026.
 
 ## Objetivo
 Una web que **solo corre en el PC del usuario**: se arranca con `python -m cdlc web`, se abre en `http://127.0.0.1:8000` y solo escucha en localhost. Sustituye a la terminal para el uso diario y será la cara del proyecto cuando el repo sea público.
@@ -33,7 +33,9 @@ Tiene que ser local por tres motivos:
 - `cli.py` queda como una capa fina de argparse sobre `pipeline.build_song`, con la misma salida que ahora.
 - Verificación: `python -m cdlc build --audio … --tab …` da el mismo resultado que antes con Seven Nation Army.
 
-### 2. Backend (`cdlc/web/app.py`)
+### 2. Backend (`cdlc/web/app.py`) — hecho
+Probado por API con Seven Nation Army: progreso por SSE, un solo trabajo a la vez (409 si hay otro) y error claro con una tab que no es de Guitar Pro. Las subidas de más de 2 días se borran al arrancar. No hay GPU/CUDA en las comprobaciones: ya no hace falta. `/api/jobs/current` permite recuperar el progreso si se recarga la página.
+
 - Dependencias: `fastapi`, `uvicorn`, `python-multipart` (añadirlas a `requirements.txt`).
 - Archivos subidos en `build/_uploads/<id>/`, que git ya ignora.
 - Endpoints:
@@ -48,7 +50,7 @@ Tiene que ser local por tres motivos:
   - `GET /api/status`: comprobaciones de entorno (Wwise compatible, ffmpeg, GPU/CUDA, carpeta `dlc/`, biblioteca de tonos), para mostrar avisos claros.
 - Escuchar solo en `127.0.0.1`. Subcomando `python -m cdlc web [--port 8000] [--no-browser]` que abre el navegador.
 
-### 3. Frontend (`cdlc/web/static/index.html` + `app.js` + `style.css`)
+### 3. Frontend (`cdlc/web/static/index.html` + `app.js` + `style.css`) — hecho, sin revisar en el navegador
 - **Nueva canción**:
   1. Arrastrar el audio y la tab.
   2. Tabla de pistas (nombre, cuerdas, afinación, notas, acordes, cobertura, instrumento) con selectores Lead y Rhythm ya rellenos con la elección automática.

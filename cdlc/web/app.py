@@ -1,0 +1,298 @@
+"""Web local del generador: python -m cdlc web (solo escucha en 127.0.0.1).
+
+Endpoints (ver docs/PLAN_WEB.md): inspección de la tab, build en segundo plano con progreso por SSE,
+canciones generadas, tonos y estado del entorno. Solo un trabajo a la vez (Wwise y la memoria).
+"""
+
+import asyncio
+import json
+import re
+import shutil
+import threading
+import time
+import traceback
+import uuid
+from pathlib import Path
+
+from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
+from fastapi.responses import FileResponse, PlainTextResponse, StreamingResponse
+from fastapi.staticfiles import StaticFiles
+
+from .. import pipeline
+from ..pipeline import DLC_DIR, ROOT, TONE_CATEGORIES, TONES_DIR, PipelineError
+
+STATIC = Path(__file__).resolve().parent / "static"
+UPLOADS = ROOT / "build" / "_uploads"
+BUILD = ROOT / "build"
+NOT_SONGS = {"_uploads", "bench", "cmp", "ref", "ref7", "ref_old", "tones"}
+
+app = FastAPI(title="Generador de CDLC", docs_url=None, redoc_url=None)
+
+
+def _clean_uploads(max_age_s: float = 2 * 86400) -> None:
+    """Las subidas (copias del audio y la tab) solo hacen falta durante el build: se borran las de más de 2 días."""
+    for d in UPLOADS.glob("*") if UPLOADS.is_dir() else []:
+        if d.is_dir() and time.time() - d.stat().st_mtime > max_age_s:
+            shutil.rmtree(d, ignore_errors=True)
+
+
+_clean_uploads()
+app.mount("/static", StaticFiles(directory=STATIC), name="static")
+
+
+# ---------------------------------------------------------------- trabajos en segundo plano
+
+class Job:
+    def __init__(self, kind: str):
+        self.id = uuid.uuid4().hex[:12]
+        self.kind = kind
+        self.events: list[dict] = []
+        self.finished = False
+        self.started = time.time()
+
+    def emit(self, **event) -> None:
+        event["t"] = round(time.time() - self.started, 1)
+        self.events.append(event)
+
+
+JOBS: dict[str, Job] = {}
+_busy = threading.Lock()
+
+
+def start_job(kind: str, work) -> Job:
+    """Lanza work(job) en un hilo. Solo uno a la vez: si hay otro en marcha, 409."""
+    if not _busy.acquire(blocking=False):
+        raise HTTPException(409, "Ya hay un trabajo en marcha; espera a que termine.")
+    job = Job(kind)
+    JOBS[job.id] = job
+
+    def run():
+        try:
+            result = work(job)
+            job.emit(type="done", result=result)
+        except PipelineError as e:
+            job.emit(type="error", message=str(e), detail=e.detail)
+        except Exception as e:  # noqa: BLE001 — cualquier fallo tiene que llegar a la página
+            job.emit(type="error", message=f"Error inesperado: {e!r}", detail=traceback.format_exc())
+        finally:
+            job.finished = True
+            _busy.release()
+
+    threading.Thread(target=run, daemon=True).start()
+    return job
+
+
+@app.get("/api/jobs/{job_id}/events")
+async def job_events(job_id: str, request: Request):
+    job = JOBS.get(job_id)
+    if job is None:
+        raise HTTPException(404, "Trabajo desconocido")
+    # EventSource reconecta solo: se continúa desde el último evento recibido
+    start = int(request.headers.get("last-event-id", -1)) + 1
+
+    async def stream():
+        i = start
+        while True:
+            while i < len(job.events):
+                yield f"id: {i}\ndata: {json.dumps(job.events[i], ensure_ascii=False)}\n\n"
+                i += 1
+            if job.finished and i >= len(job.events):
+                return
+            if await request.is_disconnected():
+                return
+            await asyncio.sleep(0.25)
+
+    return StreamingResponse(stream(), media_type="text/event-stream", headers={"Cache-Control": "no-cache"})
+
+
+@app.get("/api/jobs/current")
+def current_job():
+    """El trabajo en marcha (para recuperar el progreso si se recarga la página)."""
+    running = [j for j in JOBS.values() if not j.finished]
+    return {"id": running[-1].id, "kind": running[-1].kind} if running else {"id": None}
+
+
+# ---------------------------------------------------------------- nueva canción
+
+def _save_upload(f: UploadFile, folder: Path) -> Path:
+    name = re.sub(r"[^\w.\- ()&]+", "_", Path(f.filename or "archivo").name).strip() or "archivo"
+    dest = folder / name
+    with dest.open("wb") as out:
+        shutil.copyfileobj(f.file, out)
+    return dest
+
+
+def _upload_dir(upload_id: str) -> Path:
+    if not re.fullmatch(r"[0-9a-f]{12}", upload_id or ""):
+        raise HTTPException(400, "Identificador de subida no válido")
+    d = UPLOADS / upload_id
+    if not d.is_dir():
+        raise HTTPException(404, "La subida ya no existe; vuelve a elegir los archivos.")
+    return d
+
+
+@app.post("/api/inspect")
+def inspect(tab: UploadFile = File(...)):
+    """Sube la tab y devuelve sus pistas, la elección automática de Lead/Rhythm y los metadatos."""
+    upload_id = uuid.uuid4().hex[:12]
+    folder = UPLOADS / upload_id
+    folder.mkdir(parents=True)
+    path = _save_upload(tab, folder)
+    try:
+        info = pipeline.inspect_tab(path)
+        lead, rhythm, desc = pipeline.choose_tracks(info)
+    except PipelineError as e:
+        shutil.rmtree(folder, ignore_errors=True)
+        raise HTTPException(400, f"No se pudo leer la tab (¿es un archivo de Guitar Pro?): {e}")
+    (folder / "tab.json").write_text(json.dumps({"file": path.name}), encoding="utf-8")
+    return {"upload_id": upload_id, "filename": path.name, "info": info,
+            "auto": {"lead": lead, "rhythm": rhythm, "description": desc}}
+
+
+@app.post("/api/build")
+def build(upload_id: str = Form(...), audio: UploadFile = File(...), lead: str = Form(""),
+          rhythm: str = Form("auto"), tone: str = Form(""), artist: str = Form(""), title: str = Form(""),
+          album: str = Form(""), year: str = Form(""), deploy: bool = Form(True), lookup: bool = Form(True),
+          cover: UploadFile | None = File(None)):
+    """Lanza el build. rhythm: "auto", "none" o el índice de la pista. lead vacío: automático."""
+    folder = _upload_dir(upload_id)
+    tab = folder / json.loads((folder / "tab.json").read_text(encoding="utf-8"))["file"]
+    audio_path = _save_upload(audio, folder)
+    cover_path = _save_upload(cover, folder) if cover is not None and cover.filename else None
+    if tone and tone not in TONE_CATEGORIES:
+        raise HTTPException(400, f"Tono desconocido: {tone}")
+    try:
+        opts = pipeline.BuildOptions(
+            audio=audio_path, tab=tab,
+            lead=int(lead) if lead.strip() else None,
+            rhythm=int(rhythm) if rhythm not in ("auto", "none", "") else None,
+            no_rhythm=rhythm == "none",
+            artist=artist.strip() or None, title=title.strip() or None, album=album.strip() or None,
+            year=int(year) if year.strip() else None, cover=str(cover_path) if cover_path else None,
+            tone=tone or None, deploy=deploy, lookup=lookup)
+    except ValueError:
+        raise HTTPException(400, "Pista o año no válidos")
+
+    def work(job: Job) -> dict:
+        r = pipeline.build_song(opts, on_step=lambda n, t: job.emit(type="step", n=n, of=pipeline.STEPS, title=t),
+                                on_log=lambda line: job.emit(type="log", line=line))
+        return {"song": r.out_dir.name, "psarc": str(r.psarc), "deployed": str(r.deployed) if r.deployed else None,
+                "meta": {k: v for k, v in r.meta.items() if k != "cover"}, "tracks": r.tracks, "tone": r.tone,
+                "gaps": r.alignment.get("gaps", []), "suspicious_bars": len(r.alignment.get("suspicious_bars", []))}
+
+    job = start_job("build", work)
+    return {"job_id": job.id}
+
+
+# ---------------------------------------------------------------- canciones generadas
+
+def _song_dir(name: str) -> Path:
+    if not re.fullmatch(r"[\w.\-]+", name) or name in NOT_SONGS:
+        raise HTTPException(400, "Nombre no válido")
+    d = BUILD / name
+    if not (d / "pkg").is_dir():
+        raise HTTPException(404, "Canción desconocida")
+    return d
+
+
+def _psarc(d: Path) -> Path | None:
+    files = sorted((d / "pkg").glob("*_p.psarc"), key=lambda p: p.stat().st_mtime)
+    return files[-1] if files else None
+
+
+def _deployed(psarc: Path) -> str | None:
+    key = re.sub(r"_v\d+_p\.psarc$", "", psarc.name)
+    found = sorted(DLC_DIR.glob(f"{key}_v*_p.psarc")) if DLC_DIR.is_dir() else []
+    return found[-1].name if found else None
+
+
+@app.get("/api/songs")
+def songs():
+    out = []
+    for d in BUILD.iterdir() if BUILD.is_dir() else []:
+        if d.name in NOT_SONGS or not d.is_dir() or (psarc := _psarc(d)) is None:
+            continue
+        report = d / "pkg" / "report.md"
+        heading = report.read_text(encoding="utf-8").splitlines()[0].lstrip("# ").strip() if report.exists() else d.name
+        artist, _, title = heading.partition(" - ")
+        out.append({"name": d.name, "artist": artist, "title": title or heading, "psarc": psarc.name,
+                    "built": psarc.stat().st_mtime, "deployed": _deployed(psarc),
+                    "cover": (d / "cover.jpg").exists(), "report": report.exists()})
+    return sorted(out, key=lambda s: -s["built"])
+
+
+@app.post("/api/songs/{name}/deploy")
+def redeploy(name: str):
+    psarc = _psarc(_song_dir(name))
+    if psarc is None:
+        raise HTTPException(404, "No hay .psarc")
+    if not DLC_DIR.is_dir():
+        raise HTTPException(400, f"No existe la carpeta del juego: {DLC_DIR}")
+    logs = []
+    target = pipeline.deploy(psarc, logs.append)
+    return {"deployed": target.name, "log": logs}
+
+
+@app.get("/api/songs/{name}/cover")
+def song_cover(name: str):
+    path = _song_dir(name) / "cover.jpg"
+    if not path.exists():
+        raise HTTPException(404, "Sin portada")
+    return FileResponse(path)
+
+
+@app.get("/api/songs/{name}/report", response_class=PlainTextResponse)
+def song_report(name: str):
+    path = _song_dir(name) / "pkg" / "report.md"
+    if not path.exists():
+        raise HTTPException(404, "Sin informe")
+    return path.read_text(encoding="utf-8")
+
+
+# ---------------------------------------------------------------- tonos y entorno
+
+def _tone_index() -> list[dict]:
+    path = TONES_DIR / "index.json"
+    return json.loads(path.read_text(encoding="utf-8")) if path.exists() else []
+
+
+@app.get("/api/tones")
+def tones():
+    entries = _tone_index()
+    counts = {c: sum(e["Descriptors"] in wanted for e in entries) for c, wanted in TONE_CATEGORIES.items()}
+    return {"total": len(entries), "categories": counts}
+
+
+@app.post("/api/tones/rebuild")
+def tones_rebuild():
+    def work(job: Job) -> dict:
+        job.emit(type="step", n=0, of=0, title="Extrayendo tonos de los CDLC instalados")
+        for line in pipeline.build_tones().splitlines():
+            job.emit(type="log", line=line)
+        return {"total": len(_tone_index())}
+
+    return {"job_id": start_job("tones", work).id}
+
+
+@app.get("/api/status")
+def status():
+    ffmpeg = shutil.which("ffmpeg") or shutil.which("ffmpeg", path=str(pipeline.WINGET_LINKS))
+    checks = [
+        ("wwise", pipeline.find_wwise(), "Wwise 2019–2023 (paquete Authoring). 2024 o posterior no es compatible."),
+        ("ffmpeg", ffmpeg, "ffmpeg en el PATH (winget install Gyan.FFmpeg)."),
+        ("dotnet", shutil.which("dotnet") or (pipeline.DOTNET if Path(pipeline.DOTNET).exists() else None),
+         ".NET 10 SDK."),
+        ("rsbuild", str(pipeline.RSBUILD) if pipeline.RSBUILD.exists() else None,
+         "RsBuild compilado (dotnet build src/RsBuild -c Release); se compila solo la primera vez."),
+        ("dlc", str(DLC_DIR) if DLC_DIR.is_dir() else None, "Carpeta dlc/ de Rocksmith 2014."),
+        ("tones", f"{len(_tone_index())} tonos" if _tone_index() else None,
+         "Biblioteca de tonos: sin ella se usa un tono por defecto."),
+    ]
+    busy = next((j.id for j in JOBS.values() if not j.finished), None)
+    return {"checks": [{"key": k, "ok": bool(v), "value": v, "help": h} for k, v, h in checks],
+            "busy_job": busy}
+
+
+@app.get("/")
+def index():
+    return FileResponse(STATIC / "index.html")

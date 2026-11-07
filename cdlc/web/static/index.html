@@ -1,0 +1,98 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Generador de CDLC</title>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<header>
+  <h1>Generador de CDLC <span class="sub">tab de Guitar Pro + audio → Rocksmith 2014</span></h1>
+  <nav>
+    <button class="tab active" data-view="new">Nueva canción</button>
+    <button class="tab" data-view="songs">Mis canciones</button>
+    <button class="tab" data-view="env">Entorno</button>
+  </nav>
+</header>
+
+<div id="warnings"></div>
+
+<main>
+  <!-- Nueva canción -->
+  <section id="view-new" class="view active">
+    <div class="drops">
+      <label class="drop" id="drop-tab">
+        <input type="file" id="file-tab" accept=".gp,.gpx,.gp3,.gp4,.gp5,.gp7">
+        <strong>1. Tab de Guitar Pro</strong>
+        <span class="hint">.gp, .gpx, .gp3–.gp5 — arrastra o haz clic</span>
+        <span class="chosen" id="chosen-tab"></span>
+      </label>
+      <label class="drop" id="drop-audio">
+        <input type="file" id="file-audio" accept="audio/*,.mp3,.wav,.flac,.ogg,.m4a">
+        <strong>2. Audio</strong>
+        <span class="hint">mp3, wav, flac, ogg, m4a</span>
+        <span class="chosen" id="chosen-audio"></span>
+      </label>
+    </div>
+
+    <div id="setup" hidden>
+      <h2>Pistas</h2>
+      <p class="hint" id="auto-desc"></p>
+      <div class="table-wrap">
+        <table id="tracks">
+          <thead><tr><th>Pista</th><th>Cuerdas</th><th>Afinación</th><th>Notas</th><th>Acordes</th>
+            <th>Compases</th><th>Instrumento</th><th>Lead</th><th>Rhythm</th></tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+      <label class="inline"><input type="radio" name="rhythm" value="none"> Sin arrangement Rhythm</label>
+
+      <h2>Datos de la canción</h2>
+      <div class="grid">
+        <label>Artista <input id="m-artist"></label>
+        <label>Título <input id="m-title"></label>
+        <label>Álbum <input id="m-album" placeholder="se busca en iTunes si está vacío"></label>
+        <label>Año <input id="m-year" inputmode="numeric" placeholder="se busca en iTunes"></label>
+        <label>Tono
+          <select id="m-tone"><option value="">Automático (misma canción, artista o instrumento)</option></select>
+        </label>
+        <label>Portada <input type="file" id="m-cover" accept="image/png,image/jpeg"></label>
+      </div>
+      <label class="inline"><input type="checkbox" id="m-lookup" checked> Buscar álbum, año y portada en iTunes</label>
+      <label class="inline"><input type="checkbox" id="m-deploy" checked> Copiar a la carpeta <code>dlc/</code> del juego</label>
+      <div class="actions"><button id="btn-build" class="primary" disabled>Generar</button></div>
+    </div>
+
+    <div id="progress" hidden>
+      <h2>Progreso</h2>
+      <ol id="steps"></ol>
+      <div id="result"></div>
+      <details id="log-box"><summary>Log</summary><pre id="log"></pre></details>
+    </div>
+  </section>
+
+  <!-- Mis canciones -->
+  <section id="view-songs" class="view">
+    <div id="song-list" class="cards"></div>
+  </section>
+
+  <!-- Entorno -->
+  <section id="view-env" class="view">
+    <h2>Comprobaciones</h2>
+    <ul id="checks" class="checks"></ul>
+    <h2>Biblioteca de tonos</h2>
+    <p id="tone-summary" class="hint"></p>
+    <button id="btn-tones">Volver a extraer los tonos de los CDLC instalados</button>
+    <pre id="tones-log" hidden></pre>
+  </section>
+</main>
+
+<dialog id="report">
+  <form method="dialog"><button class="close" aria-label="Cerrar">×</button></form>
+  <pre id="report-text"></pre>
+</dialog>
+
+<script src="/static/app.js"></script>
+</body>
+</html>
