@@ -132,6 +132,66 @@ def resolve_tone(tone: str | None, artist: str | None, title: str | None,
     return None, "tono por defecto"
 
 
+# Si la canción de origen no tiene un sonido, el más parecido que sí tenga (para no mezclar orígenes)
+CATEGORY_FALLBACK = {
+    "clean": ["acoustic", "overdrive"], "acoustic": ["clean"], "overdrive": ["crunch", "distortion", "clean"],
+    "crunch": ["overdrive", "distortion"], "distortion": ["highgain", "crunch", "overdrive"],
+    "highgain": ["distortion"], "fuzz": ["distortion", "overdrive"],
+}
+
+
+def tone_set(categories: list[str], artist: str | None, title: str | None,
+             program: int | None = None) -> dict[str, tuple[Path, str]]:
+    """Un tono por sonido de la pista, todos de la misma canción de la biblioteca: los tonos de una canción
+    están equilibrados entre sí (volumen, ganancia) y los de canciones distintas no (un overdrive de otra
+    canción puede sonar mucho más bajo que la distorsión). Orden: la misma canción; una del mismo artista
+    (completando los sonidos que no tenga con el más parecido, si quedan al menos dos tonos distintos); una
+    que tenga todos los sonidos.
+    Devuelve {categoría: (archivo, descripción)}; vacío si no hay biblioteca o ninguna canción sirve."""
+    index_path = TONES_DIR / "index.json"
+    cats = [c for c in categories if c in TONE_CATEGORIES]
+    if not index_path.exists() or len(cats) < 2:
+        return {}
+    entries = json.loads(index_path.read_text(encoding="utf-8"))
+    norm = lambda s: re.sub(r"[^a-z0-9]", "", (s or "").lower())
+    by_song: dict[str, list[dict]] = {}
+    for e in entries:
+        by_song.setdefault(e["Song"], []).append(e)
+
+    def assign(song: str) -> tuple[dict[str, dict], int]:
+        """Tonos de la canción para cada sonido y cuántos son de su categoría exacta."""
+        out, exact = {}, 0
+        for c in cats:
+            for i, cand in enumerate([c] + CATEGORY_FALLBACK.get(c, [])):
+                wanted = TONE_CATEGORIES[cand]
+                hits = sorted((e for e in by_song[song] if e["Descriptors"] in wanted),
+                              key=lambda e: (e["Descriptors"] != wanted[0], e["Arrangement"] != "Lead", e["File"]))
+                if hits:
+                    out[c] = hits[0]
+                    exact += i == 0
+                    break
+        return out, exact
+
+    same_song = [s for s in by_song if artist and title and norm(s) == norm(f"{artist} - {title}")]
+    same_artist = [s for s in by_song if artist and norm(s.split(" - ")[0]) == norm(artist)]
+    for label, songs, need_exact in (("misma canción", same_song, False), ("mismo artista", same_artist, False),
+                                     ("otra canción con todos los sonidos", sorted(by_song), True)):
+        best = None
+        for song in songs:
+            got, exact = assign(song)
+            # Tiene que quedar algún contraste: si todos los sonidos acaban en el mismo tono, no sirve
+            distinct = len({e["File"] for e in got.values()})
+            if len(got) == len(cats) and distinct >= 2 and (not need_exact or exact == len(cats)):
+                if best is None or exact > best[2]:
+                    best = (song, got, exact)
+        if best:
+            song, got, _ = best
+            return {c: (TONES_DIR / e["File"], f"{label}: {song} / {e['Name']} ({e['Descriptors']})"
+                        + ("" if e["Descriptors"] in TONE_CATEGORIES[c] else f", en lugar de {c}"))
+                    for c, e in got.items()}
+    return {}
+
+
 LEAD_HINT = re.compile(r"lead|solo|hammett|slash|gilmour", re.I)
 RHYTHM_HINT = re.compile(r"rhythm|rhytm|ritm|r[ií]tmica|hetfield|izzy", re.I)
 NOT_GUITAR = re.compile(r"voice|vocal|voz|melod|keys|piano|synth|organ|strings", re.I)
@@ -227,7 +287,10 @@ def deploy(psarc: Path, on_log: Callable[[str], None] = print) -> Path:
     key = re.sub(r"_v\d+_p\.psarc$", "", psarc.name)
     pattern = re.compile(rf"^{re.escape(key)}_v(\d+)_p\.psarc$")
     old = [p for p in DLC_DIR.glob(f"{key}_v*_p.psarc") if pattern.match(p.name)]
-    version = max((int(pattern.match(p.name).group(1)) for p in old), default=0) + 1
+    # La versión del paquete (va en el título que se ve en el juego) si es nueva; si no, la siguiente libre
+    own = re.search(r"_v(\d+)_p\.psarc$", psarc.name)
+    version = max(max((int(pattern.match(p.name).group(1)) for p in old), default=0) + 1,
+                  int(own.group(1)) if own else 0)
     target = DLC_DIR / f"{key}_v{version}_p.psarc"
     shutil.copy2(psarc, target)
     for p in old:
@@ -378,6 +441,21 @@ def build_song(opts: BuildOptions, on_step: Callable[[int, str], None] = lambda 
 
     lead_program = next((t["program"] for t in info["tracks"] if t["index"] == lead), None)
     tone_path, tone_desc = resolve_tone(opts.tone, meta["artist"], meta["title"], lead_program)
+    # Pistas que cambian de sonido (instrumento o textos de la tab): un tono por sonido, salvo que se haya
+    # pedido un tono concreto
+    per_track_tones: dict[str, dict[str, Path]] = {}
+    tone_lines = []
+    for kind, idx in (("lead", lead), ("rhythm", rhythm)):
+        track = next((t for t in info["tracks"] if t["index"] == idx), None) if idx is not None else None
+        cats = (track or {}).get("tone_categories", [])
+        if opts.tone or len(cats) < 2:
+            continue
+        chosen = tone_set(cats, meta["artist"], meta["title"], track["program"])
+        if len(chosen) >= 2:
+            per_track_tones[kind] = {c: path for c, (path, _desc) in chosen.items()}
+            tone_lines += [f"{kind.capitalize()}, {c}: {desc}" for c, (_path, desc) in chosen.items()]
+    if per_track_tones:
+        tone_desc += "; con cambios de tono: " + "; ".join(tone_lines)
     on_step(4, f"XML, audio Wwise y empaquetado — tono: {tone_desc}")
     args = ["build", "--tab", str(tab), "--lead", str(lead), "--bar-times", str(out / "bar_times.json"),
             "--wav", str(wav), "--out-dir", str(out / "pkg")]
@@ -389,6 +467,10 @@ def build_song(opts: BuildOptions, on_step: Callable[[int, str], None] = lambda 
             args += [f"--{key}", str(value)]
     if tone_path:
         args += ["--tone", str(tone_path)]
+    if DLC_DIR.is_dir():
+        args += ["--dlc-dir", str(DLC_DIR)]          # versión siguiente a las del juego, en el título
+    for kind, chosen in per_track_tones.items():
+        args += [f"--tones-{kind}", "|".join(f"{c}={p}" for c, p in chosen.items())]
     log = rsbuild(*args, env=dict(os.environ, WWISEROOT=wwise))
     log_lines(log)
     m = re.search(r"PSARC:\s+(.+)", log)

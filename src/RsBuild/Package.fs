@@ -14,7 +14,19 @@ type SongInfo =
     { Artist: string
       Title: string
       Album: string
-      Year: int }
+      Year: int
+      /// Versión que se muestra en el título, " (vN)"; 0 = sin versión. La clave del DLC sale del título sin ella.
+      Version: int }
+
+/// Siguiente versión de un DLC en la carpeta del juego: 1 + la mayor <clave>_vN_p.psarc que haya.
+let nextVersion (dlcDir: string) (dlcKey: string) =
+    if String.IsNullOrEmpty dlcDir || not (Directory.Exists dlcDir) then 1
+    else
+        let pattern = Text.RegularExpressions.Regex($"^{Text.RegularExpressions.Regex.Escape dlcKey}_v(\d+)_p\.psarc$")
+        Directory.EnumerateFiles(dlcDir, $"{dlcKey}_v*_p.psarc")
+        |> Seq.choose (fun f -> let m = pattern.Match(Path.GetFileName f) in if m.Success then Some(int m.Groups[1].Value) else None)
+        |> Seq.fold max 0
+        |> (+) 1
 
 let buildConfig author =
     { Platforms = [ PC ]
@@ -52,20 +64,26 @@ let private sortable (s: string) =
     JsonObject([ Collections.Generic.KeyValuePair<string, JsonNode>("Value", JsonValue.Create s)
                  Collections.Generic.KeyValuePair<string, JsonNode>("SortValue", JsonValue.Create sortValue) ])
 
-/// Un arrangement para el proyecto: XML, tipo (Lead/Rhythm) y afinación.
+/// Un arrangement para el proyecto: XML, tipo (Lead/Rhythm), afinación y tonos (clave, archivo .json del
+/// tono; el primero es el base). Con más de uno, el XML lleva los cambios de tono con esas claves.
 type ArrangementSpec =
     { Xml: string
       Kind: ArrangementBuilder.ArrangementKind
-      Tuning: int16[] }
+      Tuning: int16[]
+      Tones: (string * string) list }
 
 /// Escribe el proyecto .rs2dlc (formato de DLC Builder). Devuelve su ruta.
 let writeProject (dir: string) (info: SongInfo) (arrangements: ArrangementSpec list) (wav: string) (previewWav: string)
-                 (previewStartMs: float) (cover: string) (toneJsonPath: string) =
+                 (previewStartMs: float) (cover: string) =
     let dlcKey = DLCKey.create "rsbuild" info.Artist info.Title
-    let tone = JsonNode.Parse(File.ReadAllText toneJsonPath)
-    // Clave y nombre deben coincidir con BaseTone de los arrangements (como en el tono por defecto)
-    tone["Key"] <- JsonValue.Create "guitar"
-    tone["Name"] <- JsonValue.Create "guitar"
+    // Un tono por clave distinta; clave y nombre deben coincidir con BaseTone/Tones de los arrangements
+    let tones =
+        arrangements |> List.collect (fun a -> a.Tones) |> List.distinctBy fst
+        |> List.map (fun (key, path) ->
+            let tone = JsonNode.Parse(File.ReadAllText path)
+            tone["Key"] <- JsonValue.Create key
+            tone["Name"] <- JsonValue.Create key
+            tone)
     let rel (p: string) = Path.GetRelativePath(dir, p)
     let arrNode (a: ArrangementSpec) =
         let name, route =
@@ -84,25 +102,29 @@ let writeProject (dir: string) (info: SongInfo) (arrangements: ArrangementSpec l
                           BassPicked = false
                           Tuning = a.Tuning
                           TuningPitch = 440.0
-                          BaseTone = "guitar"
-                          Tones = Array.empty<string>
+                          BaseTone = fst a.Tones.Head
+                          Tones = (if a.Tones.Length > 1 then a.Tones |> List.map fst |> List.toArray else Array.empty<string>)
                           MasterID = Random.Shared.Next(100_000_000, Int32.MaxValue)
                           PersistentID = Guid.NewGuid() |} |] |}))
     let project = JsonObject()
     project["Version"] <- JsonValue.Create "1"
     project["DLCKey"] <- JsonValue.Create dlcKey
     project["ArtistName"] <- sortable info.Artist
-    project["Title"] <- sortable info.Title
+    project["Title"] <- sortable (if info.Version > 0 then $"{info.Title} (v{info.Version})" else info.Title)
     project["AlbumName"] <- sortable info.Album
     project["Year"] <- JsonValue.Create info.Year
     project["AlbumArtFile"] <- JsonValue.Create(rel cover)
+    // Volumen como DLC Builder: sonoridad integrada (BS.1770) llevada a -16 LUFS. Los tonos de los CDLC están
+    // equilibrados contra esa referencia; con un volumen fijo, la música queda más fuerte o más floja que
+    // el tono según lo alto que esté grabado el audio.
+    let volume (path: string) = Rocksmith2014.Audio.Volume.calculate path
     project["AudioFile"] <- JsonObject([ Collections.Generic.KeyValuePair<string, JsonNode>("Path", JsonValue.Create(rel wav))
-                                         Collections.Generic.KeyValuePair<string, JsonNode>("Volume", JsonValue.Create -7.0) ])
+                                         Collections.Generic.KeyValuePair<string, JsonNode>("Volume", JsonValue.Create(volume wav)) ])
     project["AudioPreviewFile"] <- JsonObject([ Collections.Generic.KeyValuePair<string, JsonNode>("Path", JsonValue.Create(rel previewWav))
-                                                Collections.Generic.KeyValuePair<string, JsonNode>("Volume", JsonValue.Create -7.0) ])
+                                                Collections.Generic.KeyValuePair<string, JsonNode>("Volume", JsonValue.Create(volume previewWav)) ])
     project["AudioPreviewStartTime"] <- JsonValue.Create(previewStartMs / 1000.0)
     project["Arrangements"] <- JsonArray(arrangements |> List.map arrNode |> List.toArray)
-    project["Tones"] <- JsonArray(tone)
+    project["Tones"] <- JsonArray(tones |> List.toArray)
     let path = Path.Combine(dir, dlcKey + ".rs2dlc")
     File.WriteAllText(path, project.ToJsonString(JsonSerializerOptions(WriteIndented = true)))
     path

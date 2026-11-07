@@ -151,12 +151,74 @@ let exportTimeline (path: string) (outJson: string) =
         order.Length notes.Count held.Count (starts[starts.Count - 1] / 1000.0) outJson
 
 /// Información de la partitura y sus pistas en JSON, para que la CLI elija pistas y metadatos.
+/// Categoría de tono según el instrumento MIDI General de la pista (como PROGRAM_CATEGORY en pipeline.py).
+let programCategory (program: int) =
+    match program with
+    | 24 | 25 -> Some "acoustic"
+    | 26 | 27 | 28 | 31 -> Some "clean"
+    | 29 -> Some "overdrive"
+    | 30 -> Some "distortion"
+    | _ -> None
+
+/// Categoría de tono según un texto de la tab ("Clean", "Dist.", "w/ overdrive"…), si lo indica.
+let textCategory (text: string) =
+    if System.String.IsNullOrWhiteSpace text then None
+    else
+        let t = text.ToLowerInvariant()
+        let has (p: string) = System.Text.RegularExpressions.Regex.IsMatch(t, p)
+        if has @"clean|limpi" then Some "clean"
+        elif has @"acous|ac[uú]st" then Some "acoustic"
+        elif has @"fuzz" then Some "fuzz"
+        elif has @"\bdist|high ?gain" then Some "distortion"
+        elif has @"overdrive|\bo\.?d\.|\bdrive|crunch" then Some "overdrive"
+        else None
+
+/// Cambios de sonido de una pista en orden de reproducción: (índice en `order`, tick dentro del compás,
+/// categoría). El primero es el tono base, en (0, 0). Fuentes: el instrumento de la pista, los cambios de
+/// instrumento a mitad de pista y los textos de los beats y de las secciones. "auto" = instrumento sin
+/// categoría conocida (se elige el tono como siempre). Como mucho 4 categorías distintas (límite de Rocksmith).
+let toneSegments (s: Score) (trackIndex: int) (order: int list) : (int * float * string) list =
+    let t = s.Tracks[trackIndex]
+    let st = t.Staves[0]
+    let changes =
+        [ for k, mbIndex in List.indexed order do
+              match s.MasterBars[mbIndex].Section with
+              | null -> ()
+              | sec -> match textCategory sec.Text with Some c -> yield k, 0.0, c | None -> ()
+              for v in st.Bars[mbIndex].Voices do
+                  for b in v.Beats do
+                      for a in b.Automations do
+                          if a.Type = AutomationType.Instrument then
+                              match programCategory (int a.Value) with Some c -> yield k, b.PlaybackStart, c | None -> ()
+                      match textCategory b.Text with Some c -> yield k, b.PlaybackStart, c | None -> () ]
+        |> List.sortBy (fun (k, tick, _) -> k, tick)
+    // Primera nota de la pista: lo que cambie antes de ella pasa a ser el tono base
+    let firstNote =
+        order |> List.indexed |> List.tryPick (fun (k, mbIndex) ->
+            st.Bars[mbIndex].Voices |> Seq.collect (fun v -> v.Beats) |> Seq.filter (fun b -> b.Notes.Count > 0)
+            |> Seq.tryHead |> Option.map (fun b -> k, b.PlaybackStart))
+        |> Option.defaultValue (0, 0.0)
+    let baseCat =
+        changes |> List.filter (fun (k, tick, _) -> (k, tick) <= firstNote) |> List.tryLast
+        |> Option.map (fun (_, _, c) -> c)
+        |> Option.orElse (programCategory (int t.PlaybackInfo.Program)) |> Option.defaultValue "auto"
+    let segs =
+        changes |> List.filter (fun (k, tick, _) -> (k, tick) > firstNote)
+        |> List.fold (fun acc (k, tick, c) -> match acc with (_, _, cur) :: _ when cur = c -> acc | _ -> (k, tick, c) :: acc)
+                     [ (0, 0.0, baseCat) ]
+        |> List.rev
+    let allowed = segs |> List.map (fun (_, _, c) -> c) |> List.distinct |> List.truncate 4 |> Set.ofList
+    segs |> List.filter (fun (_, _, c) -> allowed.Contains c)
+    |> List.fold (fun acc (k, tick, c) -> match acc with (_, _, cur) :: _ when cur = c -> acc | _ -> (k, tick, c) :: acc) []
+    |> List.rev
+
 let inspectJson (path: string) =
     let s = load path
     let order = playbackOrder s
     let tracks =
         [ for t in s.Tracks do
               let st = t.Staves[0]
+              let tones = if st.StringTuning.Tunings.Count = 0 then [] else toneSegments s (int t.Index) order
               let beats =
                   [ for i in order do
                         for v in st.Bars[i].Voices do
@@ -174,6 +236,10 @@ let inspectJson (path: string) =
                  chords = beats |> List.filter (fun (_, n) -> n > 1) |> List.length
                  mean_fret = (if frets.IsEmpty then 0.0 else List.average frets)
                  max_fret = (if frets.IsEmpty then 0.0 else List.max frets)
+                 // Sonidos de la pista en orden de aparición (el primero es el base) y número de cambios
+                 tone_categories = tones |> List.map (fun (_, _, c) -> c) |> List.distinct
+                 tone_changes = max 0 (tones.Length - 1)
+                 tone_segments = tones |> List.map (fun (k, _, c) -> {| bar = k + 1; category = c |})
                  bars_with_notes =
                     order |> List.filter (fun i -> st.Bars[i].Voices |> Seq.exists (fun v -> v.Beats |> Seq.exists (fun b -> b.Notes.Count > 0))) |> List.length |} ]
     let info =
