@@ -69,7 +69,7 @@ def build_timeline(d: Path, drop: int = 0, tag: str = "") -> tuple[Path, np.ndar
     def nominal(t_ms: float) -> float:
         return float(np.interp(t_ms, beats, pos))
 
-    notes = []
+    notes, held = [], []
     for track, x in enumerate(xmls):
         if "_lead" not in x.stem and "_rhythm" not in x.stem and "_bass" not in x.stem and "_combo" not in x.stem:
             continue
@@ -85,16 +85,27 @@ def build_timeline(d: Path, drop: int = 0, tag: str = "") -> tuple[Path, np.ndar
                 continue
             s, f = int(n.get("string")), int(n.get("fret"))
             sus = float(n.get("sustain", 0) or 0) * 1000
-            t0 = nominal(t)
-            notes.append([round(t0, 1), round(max(0.0, nominal(t + sus) - t0), 1), base[s] + offs[s] + f, track])
+            midi = base[s] + offs[s] + f
+            # Trozos de altura constante: cortes en cada punto del bend (step en tonos) y en cada inicio de
+            # compás, como quedaría en Guitar Pro con ligaduras. El primero es el ataque; el resto, "held".
+            t0, t1 = nominal(t), nominal(t + sus)
+            bv = n.find("bendValues")
+            bend = sorted((float(v.get("time")) * 1000, float(v.get("step", 0) or 0)) for v in bv) if bv is not None else []
+            cuts = sorted({t0, t1} | {nominal(bt) for bt, _st in bend if t < bt < t + sus}
+                          | {float(x) for x in bar_starts if t0 < x < t1})
+            pitch_at = lambda x: midi + round(2 * next((st_ for bt, st_ in reversed(bend) if nominal(bt) <= x + 0.5), 0.0))
+            pieces = [(cuts[i], cuts[i + 1] - cuts[i], pitch_at(cuts[i])) for i in range(len(cuts) - 1)] or [(t0, 0.0, midi)]
+            notes.append([round(t0, 1), round(pieces[0][1], 1), pieces[0][2], track])
+            held += [[round(a_, 1), round(du, 1), m] for a_, du, m in pieces[1:] if du > 0]
     if drop:
         j = int(len(bar_quarters) * 0.6)
         a, b = bar_starts[j], bar_starts[j + drop]
         notes = [[t - (b - a) if t >= b else t, du, m, tr] for t, du, m, tr in notes if not a <= t < b]
+        held = [[t - (b - a) if t >= b else t, du, m] for t, du, m in held if not a <= t < b]
         bar_starts = np.concatenate([bar_starts[:j], bar_starts[j + drop:] - (b - a)])
         bar_quarters = np.concatenate([bar_quarters[:j], bar_quarters[j + drop:]])
         truth = np.concatenate([truth[:j], truth[j + drop:]])
-    tl = {"bar_starts_ms": bar_starts.tolist(), "bar_quarters": bar_quarters.tolist(), "notes": notes}
+    tl = {"bar_starts_ms": bar_starts.tolist(), "bar_quarters": bar_quarters.tolist(), "notes": notes, "held": held}
     path = d / (f"timeline{tag}_drop{drop}.json" if drop else f"timeline{tag}.json")
     path.write_text(json.dumps(tl), encoding="utf-8")
     return path, truth

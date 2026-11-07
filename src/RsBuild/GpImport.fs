@@ -93,6 +93,9 @@ let exportTimeline (path: string) (outJson: string) =
         durs.Add d
         starts.Add(starts[starts.Count - 1] + d)
     let notes = ResizeArray<float[]>()
+    // Notas que suenan sin ataque nuevo (solo para la croma de la alineación): la continuación de una
+    // nota ligada y la parte estirada de un bend (BendPoint.Value en cuartos de tono, Offset 0-60)
+    let held = ResizeArray<float[]>()
     for t in s.Tracks do
         for st in t.Staves do
             let isDrums = st.StringTuning.Tunings.Count = 0
@@ -102,9 +105,28 @@ let exportTimeline (path: string) (outJson: string) =
                     for v in st.Bars[mbIndex].Voices do
                         for b in v.Beats do
                             for n in b.Notes do
-                                if not n.IsTieDestination && not n.IsDead then
+                                if n.IsTieDestination && not n.IsDead && not isDrums then
                                     let tMs = starts[k] + durs[k] * b.PlaybackStart / barTicks
                                     let dMs = durs[k] * b.PlaybackDuration / barTicks
+                                    held.Add [| tMs; dMs; float (n.CalculateRealValue(true, true)) |]
+                                if not n.IsTieDestination && not n.IsDead then
+                                    let tMs = starts[k] + durs[k] * b.PlaybackStart / barTicks
+                                    let dMs0 = durs[k] * b.PlaybackDuration / barTicks
+                                    // Con bend: el ataque dura hasta el primer punto estirado; el resto, en held
+                                    let dMs =
+                                        if isDrums || not n.HasBend || n.BendPoints.Count = 0 then dMs0
+                                        else
+                                            let pts = n.BendPoints |> Seq.sortBy (fun p -> p.Offset) |> Array.ofSeq
+                                            let baseMidi = float (n.CalculateRealValue(true, true))
+                                            let at (off: float) = tMs + dMs0 * off / 60.0
+                                            for i in 0 .. pts.Length - 1 do
+                                                let a = at (float pts[i].Offset)
+                                                let e = if i + 1 < pts.Length then at (float pts[i + 1].Offset) else tMs + dMs0
+                                                if pts[i].Value > 0 && e > a then
+                                                    held.Add [| a; e - a; baseMidi + System.Math.Round(float pts[i].Value / 2.0) |]
+                                            match pts |> Array.tryFind (fun p -> p.Value > 0) with
+                                            | Some p -> dMs0 * float p.Offset / 60.0
+                                            | None -> dMs0
                                     // Batería: -(nota MIDI de percusión: 35/36 bombo, 38/40 caja…); -1 si no se conoce
                                     let midi =
                                         if isDrums then
@@ -122,9 +144,11 @@ let exportTimeline (path: string) (outJson: string) =
             {| bar_starts_ms = starts
                bar_quarters = order |> List.map (fun i -> s.MasterBars[i].CalculateDuration(false) / 960.0)
                notes = notes
+               held = held
                masterbar_of_bar = order |})
     File.WriteAllText(outJson, json)
-    printfn "Timeline: %d compases, %d notas, %.1f s -> %s" order.Length notes.Count (starts[starts.Count - 1] / 1000.0) outJson
+    printfn "Timeline: %d compases, %d notas (+%d sin ataque: ligaduras y bends), %.1f s -> %s"
+        order.Length notes.Count held.Count (starts[starts.Count - 1] / 1000.0) outJson
 
 /// Información de la partitura y sus pistas en JSON, para que la CLI elija pistas y metadatos.
 let inspectJson (path: string) =

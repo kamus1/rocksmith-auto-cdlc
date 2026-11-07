@@ -69,16 +69,24 @@ def count_in_bars(tl: dict) -> int:
     return k
 
 
-def _tab_chroma(tl: dict, n_frames: int) -> np.ndarray:
+def _held(tl: dict, use_held: bool = True) -> list:
+    """Notas que suenan sin ataque nuevo, [t_ms, d_ms, midi]: la parte estirada de un bend y la continuación
+    de una nota ligada o larga. Solo cuentan para la croma, no como ataques."""
+    return tl.get("held", []) if use_held else []
+
+
+def _tab_chroma(tl: dict, n_frames: int, use_held: bool = True) -> np.ndarray:
     C = np.zeros((12, n_frames))
-    for t_ms, d_ms, midi, _tr in tl["notes"]:
+    segments = [(t, d, m, True) for t, d, m, _tr in tl["notes"]] + [(t, d, m, False) for t, d, m in _held(tl, use_held)]
+    for t_ms, d_ms, midi, attack in segments:
         if midi < 0:
             continue
         a = int(t_ms / 1000 / HOP_CHROMA_S)
         b = max(a + 1, int(min(t_ms + d_ms, t_ms + 1000) / 1000 / HOP_CHROMA_S))
         if a < n_frames:
             C[int(midi) % 12, a:min(b, n_frames)] += 0.5
-            C[int(midi) % 12, a] += 1.0
+            if attack:
+                C[int(midi) % 12, a] += 1.0
     return C
 
 
@@ -128,8 +136,8 @@ def chroma_warp(tl: dict, y: np.ndarray, band_rad: float = 0.1) -> np.ndarray:
 def tempo_dp(tl: dict, y: np.ndarray, T_guess: np.ndarray, ratio_span: float = 0.35, ratio_step: float = 0.015,
              tempo_weight: float = 0.002, band: int = 3, jump_cost: float = 1.0, grid_ms: float = 25.0,
              samples: int = 16, start_ms: float = 0.0, chroma_lag_ms: float = 160.0,
-             gap_cost: float = 0.2, end_ms: float = np.inf, silence_db: float = -50.0,
-             lead_slack_bars: int | None = 2) -> tuple[np.ndarray, list[tuple[int, float]]]:
+             gap_cost: float | np.ndarray = 0.2, end_ms: float = np.inf, silence_db: float = -50.0,
+             lead_slack_bars: int | None = 2, use_held: bool = True) -> tuple[np.ndarray, list[tuple[int, float]]]:
     """Inicio (ms) de cada compás por programación dinámica con un modelo de tempo plausible.
 
     Estado en cada frontera de compás: (instante en el audio, en pasos de grid_ms; relación de tempo
@@ -167,11 +175,17 @@ def tempo_dp(tl: dict, y: np.ndarray, T_guess: np.ndarray, ratio_span: float = 0
             has[k] = True
     if not has.any():
         return T_guess, []
+    # Compases con emisión: con algún ataque o con alguna nota que sigue sonando (bend, ligadura)
+    emit = has.copy()
+    for t_ms, d_ms, midi in _held(tl, use_held):
+        if midi >= 0:
+            a_, b_ = np.searchsorted(st, [t_ms, t_ms + max(d_ms, 1)], side="right") - 1
+            emit[max(0, a_):min(n, b_ + 1)] = True
     k0, k1 = int(np.argmax(has)), int(n - np.argmax(has[::-1]))      # compases [k0, k1) con notas
 
     # Croma de la tab (frames de hop_ms) y del audio interpolada a la rejilla, normalizadas
     n_tab = int(st[-1] / hop_ms) + 2
-    X = librosa.util.normalize(np.log1p(_tab_chroma(tl, n_tab) * 10), norm=2, axis=0, fill=False)
+    X = librosa.util.normalize(np.log1p(_tab_chroma(tl, n_tab, use_held) * 10), norm=2, axis=0, fill=False)
     Y = librosa.feature.chroma_cqt(y=y, sr=SR, hop_length=int(round(HOP_CHROMA_S * SR)))
     Y = np.log1p(Y * 10)
     rms = librosa.feature.rms(y=y, hop_length=int(round(HOP_CHROMA_S * SR)))[0][:Y.shape[1]]
@@ -212,7 +226,7 @@ def tempo_dp(tl: dict, y: np.ndarray, T_guess: np.ndarray, ratio_span: float = 0
             prev = np.concatenate([np.full((R, 1), np.inf, dtype=np.float32), cost[:, :-1]], axis=1)
             g = np.minimum.accumulate(prev, axis=1)
             fresh = prev <= g
-            via = g + np.float32(gap_cost)
+            via = g + np.float32(gap_cost[k] if np.ndim(gap_cost) else gap_cost)
             use = via < cost
             cost = np.where(use, via, cost)
             used_gap[j], fresh_min[j] = np.packbits(use, axis=1), np.packbits(fresh, axis=1)
@@ -231,7 +245,7 @@ def tempo_dp(tl: dict, y: np.ndarray, T_guess: np.ndarray, ratio_span: float = 0
         best = np.where(better, jc[None, :], best)
         br = np.where(better, jr[None, :].astype(np.int8), br)
         # Emisión: similitud de unos instantes de la tab en el compás k con el audio, desde t con relación r'
-        if has[k]:
+        if emit[k]:
             ts = st[k] + (st[k + 1] - st[k]) * np.arange(samples) / samples
             rows = np.clip(np.rint(ts / hop_ms).astype(int), 0, n_tab - 1)
             Sk = X[:, rows].T.astype(np.float32) @ Y                  # (samples, n_g)
@@ -239,7 +253,7 @@ def tempo_dp(tl: dict, y: np.ndarray, T_guess: np.ndarray, ratio_span: float = 0
         new = np.full((R, n_g), np.inf, dtype=np.float32)
         for i, r in enumerate(ratios):
             val = best[i]
-            if has[k]:
+            if emit[k]:
                 em = np.zeros(n_g, dtype=np.float32)
                 for s_, t_ in enumerate(ts):
                     o = cells(t_ - st[k], r)
@@ -323,23 +337,28 @@ def _class_onsets(tl: dict) -> list[tuple[str, np.ndarray, np.ndarray]]:
     return out
 
 
-def _bar_part_chroma(tl: dict, st: np.ndarray, parts: int) -> np.ndarray:
-    """(compases, partes, 12): croma de la tab en cada trozo del compás (notas que suenan en él)."""
+def _bar_part_chroma(tl: dict, st: np.ndarray, parts: int, use_held: bool = True) -> np.ndarray:
+    """(compases, partes, 12): croma de la tab en cada trozo del compás (notas que suenan en él).
+    Un ataque cuenta solo en su compás; una nota que sigue sonando (held) cuenta en todos los que cruza."""
     n = len(st) - 1
     out = np.zeros((n, parts, 12))
-    for t_ms, d_ms, midi, _tr in tl["notes"]:
+    segments = [(t, d, m, True) for t, d, m, _tr in tl["notes"]] + [(t, d, m, False) for t, d, m in _held(tl, use_held)]
+    for t_ms, d_ms, midi, attack in segments:
         if midi < 0:
             continue
         k = int(np.searchsorted(st, t_ms, side="right") - 1)
-        if not 0 <= k < n:
-            continue
-        length = st[k + 1] - st[k]
-        p0 = (t_ms - st[k]) / length * parts
-        p1 = min(parts, p0 + max(d_ms, 1) / length * parts)
-        for p in range(int(p0), int(np.ceil(p1))):
-            overlap = min(p1, p + 1) - max(p0, p)
-            if overlap > 0:
-                out[k, p, int(midi) % 12] += overlap + (0.5 if p == int(p0) else 0)
+        end = t_ms + max(d_ms, 1)
+        while 0 <= k < n and st[k] < end:
+            length = st[k + 1] - st[k]
+            p0 = max(0.0, (t_ms - st[k]) / length * parts)
+            p1 = min(parts, (end - st[k]) / length * parts)
+            for p in range(int(p0), int(np.ceil(p1))):
+                overlap = min(p1, p + 1) - max(p0, p)
+                if overlap > 0:
+                    out[k, p, int(midi) % 12] += overlap + (0.5 if attack and p == int(p0) and st[k] <= t_ms else 0)
+            if attack:
+                break                                       # como antes: un ataque solo cuenta en su compás
+            k += 1
     norm = np.linalg.norm(out, axis=2, keepdims=True)
     return np.where(norm > 0, out / np.maximum(norm, 1e-9), 0)
 
@@ -348,6 +367,7 @@ def align_hybrid(timeline_json: Path, wav: Path, out_json: Path, radius_beats: f
                  grid_ms: float = 10.0, smooth_weight: float = 0.5, onset_lag_ms: float = 40.0,
                  chroma_weight: float = 3.0, chroma_parts: int = 4, anchor_weight: float = 0.3,
                  gap_select_margin: float = 0.0, anchor_ref_ms: float | None = 450.0,
+                 use_held: bool = True, per_gap_select: bool = True, gap_ban_bars: int = 4,
                  tempo_params: dict | None = None) -> dict:
     """Alineación híbrida (ver docstring del módulo y docs/ALINEACION.md)."""
     import librosa
@@ -386,7 +406,7 @@ def align_hybrid(timeline_json: Path, wav: Path, out_json: Path, radius_beats: f
     C_audio = librosa.feature.chroma_cqt(y=librosa.effects.harmonic(y), sr=SR, hop_length=hop_c)
     C_cum = np.concatenate([np.zeros((12, 1)), np.cumsum(C_audio, axis=1)], axis=1)
     step_c = hop_c / SR * 1000
-    tab_parts = _bar_part_chroma(tl, st, chroma_parts)
+    tab_parts = _bar_part_chroma(tl, st, chroma_parts, use_held)
     nf = C_audio.shape[1]
 
     def chroma_score(k: int, a: np.ndarray, b: np.ndarray) -> np.ndarray:
@@ -458,7 +478,7 @@ def align_hybrid(timeline_json: Path, wav: Path, out_json: Path, radius_beats: f
     T_c = chroma_warp(tl, y)
     start_ms = audio_start_ms(wav)
     end_ms = librosa.effects.trim(y, top_db=40)[1][1] / SR * 1000
-    tp = dict(start_ms=start_ms, end_ms=end_ms, **(tempo_params or {}))
+    tp = dict(start_ms=start_ms, end_ms=end_ms, use_held=use_held, **(tempo_params or {}))
     T_s, gaps = tempo_dp(tl, y, T_c, **tp)
     gap_ms = np.zeros(n)                                   # audio sin tab tras el compás k
     for k, sec in gaps:
@@ -469,7 +489,36 @@ def align_hybrid(timeline_json: Path, wav: Path, out_json: Path, radius_beats: f
         T_s0, _ = tempo_dp(tl, y, T_c, **{**tp, "gap_cost": np.inf})
         T0, off0, score_nogap = fine(T_s0, np.zeros(n))
         if score_nogap <= score + gap_select_margin * len(gaps):
-            T, off, gaps, gap_ms, T_s = T0, off0, [], np.zeros(n), T_s0
+            T, off, gaps, gap_ms, T_s, score = T0, off0, [], np.zeros(n), T_s0, score_nogap
+    # Cada hueco se decide por separado: se prueba a quitarlo (prohibiendo ±gap_ban_bars compases, para que
+    # la DP no lo ponga al lado) y a moverlo (prohibiendo solo su sitio y los vecinos), y se queda la opción
+    # con mejor coste fino. Si no, un hueco real puede arrastrar a uno falso (antes se aceptaban todos o
+    # ninguno), y un hueco mal colocado dentro de un pasaje repetido nunca se comparaba con otro sitio.
+    base_cost = tp.get("gap_cost", 0.2)
+    tried = set()
+    for _round in range(4):
+        if not (per_gap_select and gaps):
+            break
+        best = None
+        for k_gap, _sec in gaps:
+            for ban in (1, gap_ban_bars):
+                if (k_gap, ban) in tried:
+                    continue
+                tried.add((k_gap, ban))
+                gc = np.full(n + 1, float(base_cost))
+                gc[max(0, k_gap - ban):k_gap + ban + 1] = np.inf
+                T_b, gaps_b = tempo_dp(tl, y, T_c, **{**tp, "gap_cost": gc})
+                if len(gaps_b) > len(gaps) or [g for g, _ in gaps_b] == [g for g, _ in gaps]:
+                    continue
+                gm_b = np.zeros(n)
+                for k, sec in gaps_b:
+                    gm_b[k - 1] = sec * 1000
+                T2, off2, score2 = fine(T_b, gm_b)
+                if score2 <= score + gap_select_margin * (len(gaps_b) - len(gaps)) and (best is None or score2 < best[2]):
+                    best = (T2, off2, score2, T_b, gaps_b, gm_b)
+        if best is None:
+            break
+        T, off, score, T_s, gaps, gap_ms = best
 
     ends = np.maximum(T[1:] - gap_ms, T[:-1] + 1)          # fin real de cada compás (antes del hueco)
     ratio = (ends - T[:-1]) / np.diff(st)

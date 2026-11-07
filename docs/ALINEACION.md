@@ -155,3 +155,21 @@ Probado y descartado: croma de la parte armónica (HPSS) en la etapa gruesa y te
 
 ### Cuenta de entrada (07/11/2026)
 Los compases del principio sin notas con altura y solo con baquetas, aro o charles (`COUNT_IN`) se tratan como cuenta de entrada y sus golpes no se alinean (`count_in_bars` en el resultado). En *The Trooper* (Iron Maiden) la tab empieza con 4 golpes de charles abierto que la grabación no tiene. El paso fino los encajaba en el audio y arrastraba los compases 2–3: la primera nota quedaba 350 ms tarde y esos compases se acortaban a 1.380 y 1.480 ms frente a ~1.540. Ahora quedan a 1.580 y 1.530 ms y la primera nota cae al empezar el audio. Del compás 4 en adelante nada cambia; MoP y SNA quedan idénticos. El banco no se ve afectado porque sus tabs no tienen batería.
+
+### Notas que siguen sonando y huecos uno a uno (07/11/2026)
+El usuario probó en el juego la alineación de Mastodon (*Oblivion*, charts oficiales movidos a nuestros tiempos) y vio que la deriva de los c129–153 empieza con unos bends muy largos. Había dos puntos ciegos en la tab:
+- **Bends:** la croma usaba la nota sin estirar, y el audio suena hasta 2 tonos más agudo.
+- **Notas largas y ligaduras:** una nota contaba solo en su compás y como mucho 1 s; las continuaciones ligadas de Guitar Pro se descartaban. Los compases donde sigue sonando una nota quedaban vacíos para la alineación.
+
+**Cambio 1 (`use_held`):** la tab lleva una lista `held` de notas que suenan sin ataque nuevo ([t, d, midi]): la parte estirada de un bend y la continuación de una nota ligada. Solo cuentan para la croma (`_tab_chroma`, `_bar_part_chroma`, emisión de `tempo_dp` en compases sin ataque), no como ataques. Sale de `RsBuild timeline` (ligaduras y `BendPoints` de Guitar Pro) y, en el banco, de `bendValues` y de las notas largas partidas por compás.
+**Cambio 2 (`per_gap_select`):** cada hueco que propone la DP se decide por separado. Se prueba a quitarlo (prohibiendo ±4 compases) y a moverlo (prohibiendo su sitio y los vecinos), y se queda la opción con mejor coste fino. Antes se aceptaban todos o ninguno: en Queensrÿche (2 compases quitados) un hueco real arrastraba a uno falso, y en Joni Mitchell el hueco caía 2 compases antes, en un pasaje repetido, sin que se probara otro sitio.
+
+| Versión | Desarrollo: >½ beat / bien | 2 compases quitados: >½ beat / bien |
+|---|---|---|
+| Antes (`744ba98`) | 2,8 % / 22 de 24 | 7,0 % / 17 de 24 |
+| **Notas que siguen sonando + huecos uno a uno** | **2,7 % / 23 de 24** | **6,5 % / 17 de 24** |
+
+En desarrollo solo cambia Mastodon (6,3 % → 3,4 %). Con 2 compases quitados mejoran Machine Head (22,8 % → 15,0 %), Mastodon (9,8 % → 6,9 %) y Queen (7,9 % → 6,3 %). Empeoran un compás cada una Queensrÿche (c184 a +0,52 beats) y Norah Jones (c108 a −0,53), en zonas de 7 y 2 notas; el usuario aceptó el cambio sabiéndolo. MoP con la tab real (463 trozos de ligaduras y bends): igual, 10 ms. SNA: el hueco pasa del c89 al c96, dentro del mismo riff de 2 compases que se repite idéntico, así que en el juego cae igual.
+
+Probado y descartado antes de esto, para la deriva de Mastodon: sujetar el tempo al local de los compases con notas (hereda la deriva de la primera pasada; 11 → 28 compases mal), una curva alternativa interpolada en los tramos vacíos elegida por coste fino (los vecinos también están desplazados) y un ancla proporcional a la densidad de notas (el paso fino solo cobra por desviarse de la forma de la curva gruesa, así que sigue su deriva). Con la curva verdadera como etapa gruesa el paso fino coloca bien los 175 compases de Mastodon: el fallo que queda en Yes y Mastodon es de la etapa gruesa.
+Herramienta de diagnóstico usada (fuera del repo): charts oficiales de una canción del banco movidos a los tiempos de nuestra alineación y empaquetados, para verla en el juego.

@@ -23,16 +23,17 @@ def main() -> None:
     p = argparse.ArgumentParser()
     p.add_argument("--params", default="{}", help="parámetros de align_hybrid en JSON")
     p.add_argument("--compare", nargs="*", default=[], help="otros bar_times.json para comparar")
+    p.add_argument("--timeline", default="timeline.json", help="línea de tiempo de la tab, en build/ref7/")
     a = p.parse_args()
     d = ROOT / "build" / "ref7"
     out = d / "bt_mop.json"
     t0 = time.time()
-    align.align_hybrid(d / "timeline.json", d / "song.wav", out, **json.loads(a.params))
+    align.align_hybrid(d / a.timeline, d / "song.wav", out, **json.loads(a.params))
     print(f"alineación: {time.time() - t0:.0f} s")
     ref_dir = ROOT / "build" / "ref"
     ref = ev.ref_notes(sorted(ref_dir.glob("*_lead.xml")) + sorted(ref_dir.glob("*_rhythm.xml")))
     for f in [out] + [Path(c) for c in a.compare]:
-        ev.summary(ref, ev.our_notes(d / "timeline.json", f, tracks=set(range(16))), f.name)
+        ev.summary(ref, ev.our_notes(d / a.timeline, f, tracks=set(range(16))), f.name)
 
 
 if __name__ == "__main__":
