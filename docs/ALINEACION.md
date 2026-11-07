@@ -71,7 +71,7 @@ Conclusiones:
 5. Validar en el juego: Master of Puppets y Seven Nation Army.
 
 ## Banco de pruebas (24 canciones oficiales/CDLC con beat map hecho a mano)
-- Selección (`bench/select.py` sobre `bench/survey.fsx`): 4 grupos × 6 canciones (metrónomo o tempo variable × compás regular o irregular), una por artista, repartidas 3/3 entre **desarrollo** y **validación**. La validación no se mira al ajustar.
+- Selección (`bench/select_v1.py` sobre `bench/survey.fsx`): 4 grupos × 6 canciones (metrónomo o tempo variable × compás regular o irregular), una por artista, repartidas 3/3 entre **desarrollo** y **validación**. La validación no se mira al ajustar.
 - `bench/extract.fsx` extrae charts y audio; `bench/run.py` construye una "tab" a tempo fijo con la misma estructura y notas (Lead + Rhythm + Bass, **sin batería**), alinea y compara cada compás con notas con el real.
 - Uso: `.venv/Scripts/python bench/run.py --set desarrollo --tag nombre [--params '{"onset_lag_ms": 20}']`.
 
@@ -124,3 +124,31 @@ Cuál de las repeticiones es la que falta no se puede saber en un riff que se re
 - **Yes – I've Seen All Good People (validación, 43 %):** la etapa gruesa tiene un desfase casi constante de +1,5 a +2,8 beats durante 90 compases de la parte acústica con voces. La armonía es ambigua a ±2 beats y el paso fino no llega.
 - Rendimiento: ~20–30 s por canción en la DP de tempo. Memoria de los punteros de retroceso: compases × 41 × (duración / 25 ms) bytes, unos 350 MB para los 8,5 min de MoP. Si molesta, limitar la ventana temporal de cada compás.
 
+
+## Sesión del 07/11/2026: banco ampliado, ancla en ms e intro de la tab
+
+### Banco nuevo
+La validación anterior ya se había usado, así que pasa a desarrollo (**24 canciones**; el reparto viejo queda en `set_v1` de `benchmark.json`, copia en `benchmark_v1.json`). `bench/select_new_val.py` eligió **12 canciones de validación nuevas** (3 por grupo, sin repetir artistas): A Perfect Circle, The War on Drugs, Ghost, Elle King, Jim Johnston, Trivium, Spinal Tap, Bach, The Notetrackers (Superman), Third Eye Blind, FUN. y Stereophonics. `bench/select.py` pasa a `select_v1.py`: con `bench/` en la ruta tapaba el módulo estándar `select` y, al importarse, reescribía `benchmark.json`.
+Herramientas nuevas: `bench/diag.py` (error por compás de la etapa gruesa y del paso fino; `--oracle` usa la verdad como etapa gruesa) y `bench/compare.py` (dos ejecuciones, canción a canción). El resultado de `align_hybrid` incluye ahora `coarse_bar_times_ms`.
+
+### Cambios (los dos generales, ahora por defecto)
+- **Ancla en ms** (`anchor_ref_ms=450`): el ancla del paso fino mide el desplazamiento en unidades de mín(beat, 450 ms) en vez de en beats. El error de la etapa gruesa es en ms (resolución de la croma), no en beats: en una canción lenta (beat de 790 ms) un beat de desplazamiento es mucho error y antes casi no costaba. El mínimo hace que el ancla nunca sea más débil que antes (con 450 ms a secas, Joy Division, rápida, pasaba de 0,8 % a 16,8 %).
+- **Intro de la tab** (`lead_slack_bars=2` en `tempo_dp`): la primera nota no puede sonar antes del inicio del audio más la duración de los compases vacíos del principio de la tab, con 2 compases de margen (compás de cuenta añadido). Es un límite inferior: una tab que se salta la intro no se ve afectada. Quita el hueco falso de Mastodon, que colocaba el riff sobre la intro.
+
+### Resultados
+| Versión | Desarrollo (24): >½ beat / bien | Desarrollo, 2 compases quitados | Validación nueva (12) |
+|---|---|---|---|
+| Anterior (`0b4a9d8`) | 4,2 % / 21 de 24 | 8,6 % | 5,0 % / 9 de 12 |
+| + ancla en ms | 3,1 % / 22 de 24 | — | — |
+| **+ intro de la tab** | **2,8 % / 22 de 24** | **7,0 %** | **5,3 % / 9 de 12** |
+
+En desarrollo mejoran Queen (29 % → 4,6 %), Mastodon (13 % → 6,3 %) y Elvis (2 % → 0 %), y no empeora ninguna. MoP: idéntico (10 ms, 0 % > 100 ms).
+**En la validación nueva no hay mejora** (5,0 % → 5,3 %: Bach 1,5 % → 4,4 %, 2 compases de 73; FUN. 2,7 % → 1,8 %). Los dos cambios arreglan fallos que existían en desarrollo y no hacen daño, pero los fallos de la validación son de otro tipo.
+
+Probado y descartado: croma de la parte armónica (HPSS) en la etapa gruesa y tempo más rígido (0,02) para Yes, sin efecto.
+
+### Fallos que quedan
+- **Yes (desarrollo, 43 %):** con la verdad como etapa gruesa, el paso fino la mantiene (8 de 207 compases mal) y su coste es claramente mejor (−454,8 frente a −432,0). El fallo es de la etapa gruesa, que deriva hasta +2,8 beats en 90 compases de un patrón repetido. La ventaja del paso fino es pequeña por compás (~0,25 unidades de `w_ref`) frente al ancla a 2 beats (~1,2), así que no puede corregirlo sin quitar la protección que arregla Queen. Idea: generar varias hipótesis de etapa gruesa y elegir por coste fino (como con los huecos), pero hace falta una forma general de generarlas.
+- **Spinal Tap (validación, 35 %):** tras el c89 hay ~12 compases casi vacíos con un cambio de tempo real (beat de 474 a 650 ms); la DP los comprime y todo lo que sigue va 16 beats antes. Mismo tipo que la deriva de Mastodon en los c129–153.
+- **Superman (validación, 16 %):** intro orquestal en rubato (beat de 790 a 1.074 ms en pocos compases, pocas notas). La etapa gruesa empieza 19 beats tarde y elige un hueco (coste fino −335 con hueco frente a −331 sin él).
+- **Común:** tramos con pocas notas y tempo libre. Ahí la tab casi no da información; lo único general que queda es usar más pistas de la tab (la batería de Guitar Pro, que el banco no tiene porque sale de charts de Rocksmith).

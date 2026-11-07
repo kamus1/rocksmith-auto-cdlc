@@ -107,7 +107,8 @@ def chroma_warp(tl: dict, y: np.ndarray, band_rad: float = 0.1) -> np.ndarray:
 def tempo_dp(tl: dict, y: np.ndarray, T_guess: np.ndarray, ratio_span: float = 0.35, ratio_step: float = 0.015,
              tempo_weight: float = 0.002, band: int = 3, jump_cost: float = 1.0, grid_ms: float = 25.0,
              samples: int = 16, start_ms: float = 0.0, chroma_lag_ms: float = 160.0,
-             gap_cost: float = 0.2, end_ms: float = np.inf, silence_db: float = -50.0) -> tuple[np.ndarray, list[tuple[int, float]]]:
+             gap_cost: float = 0.2, end_ms: float = np.inf, silence_db: float = -50.0,
+             lead_slack_bars: int | None = 2) -> tuple[np.ndarray, list[tuple[int, float]]]:
     """Inicio (ms) de cada compás por programación dinámica con un modelo de tempo plausible.
 
     Estado en cada frontera de compás: (instante en el audio, en pasos de grid_ms; relación de tempo
@@ -174,8 +175,12 @@ def tempo_dp(tl: dict, y: np.ndarray, T_guess: np.ndarray, ratio_span: float = 0
     t_idx = np.arange(n_g)
     first_note = min(t for t, _d, midi, _tr in tl["notes"] if midi >= 0)
     cost = np.zeros((R, n_g), dtype=np.float32)                      # inicio libre, salvo la restricción
+    # Compases vacíos al principio de la tab (intro sin la guitarra): la primera nota no puede sonar antes
+    # de que pasen, salvo lead_slack_bars de margen (un compás de cuenta añadido a la tab, por ejemplo).
+    # Solo es un límite inferior: si la tab se salta la intro, la primera nota cae más tarde y no estorba.
+    lead_ms = 0.0 if lead_slack_bars is None else max(0.0, first_note - st[min(lead_slack_bars, n)])
     for i, r in enumerate(ratios):
-        cost[i, t_idx * grid_ms + (first_note - st[k0]) * r < start_ms - 150] = np.inf
+        cost[i, t_idx * grid_ms + (first_note - st[k0]) * r < start_ms - 150 + lead_ms * r] = np.inf
     backs_r = np.zeros((k1 - k0, R, n_g), dtype=np.int8)
     # Huecos: g[t] = mejor coste de haber llegado a la frontera antes de t (mínimo acumulado).
     # Bits por frontera: used = se llega por un hueco; fresh = el mínimo de g se renovó en t-1.
@@ -321,7 +326,8 @@ def _bar_part_chroma(tl: dict, st: np.ndarray, parts: int) -> np.ndarray:
 def align_hybrid(timeline_json: Path, wav: Path, out_json: Path, radius_beats: float = 2.5,
                  grid_ms: float = 10.0, smooth_weight: float = 0.5, onset_lag_ms: float = 40.0,
                  chroma_weight: float = 3.0, chroma_parts: int = 4, anchor_weight: float = 0.3,
-                 gap_select_margin: float = 0.0, tempo_params: dict | None = None) -> dict:
+                 gap_select_margin: float = 0.0, anchor_ref_ms: float | None = 450.0,
+                 tempo_params: dict | None = None) -> dict:
     """Alineación híbrida (ver docstring del módulo y docs/ALINEACION.md)."""
     import librosa
 
@@ -394,7 +400,7 @@ def align_hybrid(timeline_json: Path, wav: Path, out_json: Path, radius_beats: f
         d = (offs[None, :] - offs[:, None]) / beat_ms
         trans = smooth_weight * w_ref * d ** 2
         # Ancla suave a la curva gruesa: sin ella, en tramos de ritmo ambiguo el paso fino se va a ±1 beat
-        anchor = anchor_weight * w_ref * (offs / beat_ms) ** 2
+        anchor = anchor_weight * w_ref * (offs / min(beat_ms, anchor_ref_ms or beat_ms)) ** 2
 
         # Restricción general: la primera nota de la tab no puede sonar antes de que empiece el audio.
         # Resuelve ambigüedades de ciclos que se repiten (p. ej. dos compases de los mismos acordes en
@@ -439,7 +445,7 @@ def align_hybrid(timeline_json: Path, wav: Path, out_json: Path, radius_beats: f
         T_s0, _ = tempo_dp(tl, y, T_c, **{**tp, "gap_cost": np.inf})
         T0, off0, score_nogap = fine(T_s0, np.zeros(n))
         if score_nogap <= score + gap_select_margin * len(gaps):
-            T, off, gaps, gap_ms = T0, off0, [], np.zeros(n)
+            T, off, gaps, gap_ms, T_s = T0, off0, [], np.zeros(n), T_s0
 
     ends = np.maximum(T[1:] - gap_ms, T[:-1] + 1)          # fin real de cada compás (antes del hueco)
     ratio = (ends - T[:-1]) / np.diff(st)
@@ -448,6 +454,8 @@ def align_hybrid(timeline_json: Path, wav: Path, out_json: Path, radius_beats: f
         "bar_times_ms": [round(float(t), 1) for t in T],
         # Solo distinto de bar_times_ms[k + 1] si tras el compás hay un hueco (audio que no está en la tab)
         "bar_ends_ms": [round(float(t), 1) for t in ends],
+        # Etapa gruesa (DP de tempo), antes del paso fino: para diagnóstico
+        "coarse_bar_times_ms": [round(float(t), 1) for t in T_s],
         "tempo_ratio_median": round(med, 4),
         "suspicious_bars": [int(k + 1) for k, x in enumerate(ratio) if abs(x / med - 1) > 0.1],
         "method": "hybrid",

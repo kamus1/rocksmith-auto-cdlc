@@ -1,6 +1,6 @@
 """Banco de pruebas de la alineación con CDLC reales sincronizados a mano.
 
-Para cada canción de build/bench/benchmark.json (preparada con select.py + extract.fsx):
+Para cada canción de build/bench/benchmark.json (preparada con select_v1.py o select_new_val.py + extract.fsx):
   1. Convierte el audio .wem a WAV.
   2. Construye una "tab" a tempo fijo con la misma estructura de compases y las mismas notas
      (Lead, Rhythm, Bass), olvidando los tiempos reales.
@@ -11,6 +11,7 @@ Uso: .venv/Scripts/python bench/run.py [--set desarrollo|validación|todos] [--w
 
 import argparse
 import json
+import os
 import subprocess
 import sys
 import time
@@ -44,7 +45,7 @@ def max_level(root):
     return max(root.find("levels"), key=lambda l: len(l.find("notes")) + len(l.find("chords")))
 
 
-def build_timeline(d: Path, drop: int = 0) -> tuple[Path, np.ndarray]:
+def build_timeline(d: Path, drop: int = 0, tag: str = "") -> tuple[Path, np.ndarray]:
     """Tab a tempo fijo desde los XML de referencia. Devuelve (timeline.json, tiempos reales de cada compás).
 
     drop > 0 quita esos compases de la tab hacia el 60 % de la canción (el audio los conserva): simula una
@@ -94,7 +95,7 @@ def build_timeline(d: Path, drop: int = 0) -> tuple[Path, np.ndarray]:
         bar_quarters = np.concatenate([bar_quarters[:j], bar_quarters[j + drop:]])
         truth = np.concatenate([truth[:j], truth[j + drop:]])
     tl = {"bar_starts_ms": bar_starts.tolist(), "bar_quarters": bar_quarters.tolist(), "notes": notes}
-    path = d / (f"timeline_drop{drop}.json" if drop else "timeline.json")
+    path = d / (f"timeline{tag}_drop{drop}.json" if drop else f"timeline{tag}.json")
     path.write_text(json.dumps(tl), encoding="utf-8")
     return path, truth
 
@@ -104,12 +105,15 @@ def run_song(song: dict, kwargs: dict, drop: int = 0) -> dict:
     t0 = time.time()
     try:
         wav = wem_to_wav(d)
-        tl, truth = build_timeline(d, drop)
-        res = align.align_hybrid(tl, wav, d / "bt_bench.json", **kwargs)
+        # Archivo propio de este proceso: dos bancos a la vez no deben pisarse la tab
+        tl, truth = build_timeline(d, drop, f"_{os.getpid()}")
+        res = align.align_hybrid(tl, wav, d / f"bt_bench_{os.getpid()}.json", **kwargs)
+        (d / f"bt_bench_{os.getpid()}.json").unlink()
         T = np.array(res["bar_times_ms"])
         n = min(len(T), len(truth))
         # Solo compases con notas: en los vacíos (count-in, intros sin la guitarra) no hay nada que alinear
         tlj = json.loads(tl.read_text())
+        tl.unlink()
         st = np.array(tlj["bar_starts_ms"])
         has = np.zeros(n, dtype=bool)
         for note in tlj["notes"]:
@@ -119,7 +123,7 @@ def run_song(song: dict, kwargs: dict, drop: int = 0) -> dict:
         err = (T[:n] - truth[:n])[has]
         a = np.abs(err)
         n = int(has.sum())
-        beat = float(np.median(np.diff(truth)) / max(1.0, np.median(json.loads(tl.read_text())["bar_quarters"])))
+        beat = float(np.median(np.diff(truth)) / max(1.0, np.median(tlj["bar_quarters"])))
         return dict(song=f"{song['artist']} - {song['title']}", set=song["set"], group=song.get("group", ""),
                     bars=int(n), median=float(np.median(a)), p90=float(np.percentile(a, 90)),
                     over50=float(np.mean(a > 50)), over_half_beat=float(np.mean(a > beat / 2)),
