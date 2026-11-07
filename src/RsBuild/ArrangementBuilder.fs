@@ -247,13 +247,18 @@ let build (score: Score) (trackIndex: int) (kind: ArrangementKind) (order: int l
                 let fs = arr.ChordTemplates[int c.ChordId].Frets |> Array.filter (fun f -> f > 0y) |> Array.map int
                 if fs.Length = 0 then c.Time, 0, 0 else c.Time, Array.min fs, Array.max fs))
         |> Seq.sortBy (fun (t, _, _) -> t)
+    //    La ventana no puede pasar del traste 24 (como en los charts oficiales: la última de 4 es la 21–24);
+    //    si no, con notas en el 22–24 la cámara se va fuera del mástil.
+    let lastFret = 24
     let mutable anchor = 0
+    let mutable anchorWidth = 4
     for (t, lo, hi) in fretted do
         if lo > 0 then
-            let width = max 4 (hi - lo + 1)
-            if anchor = 0 || lo < anchor || hi > anchor + width - 1 then
-                anchor <- lo
-                level.Anchors.Add(Anchor(sbyte anchor, t, sbyte (min 6 width)))
+            let width = min 6 (max 4 (hi - lo + 1))
+            if anchor = 0 || lo < anchor || hi > anchor + anchorWidth - 1 then
+                anchor <- max 1 (min lo (lastFret - width + 1))
+                anchorWidth <- width
+                level.Anchors.Add(Anchor(sbyte anchor, t, sbyte width))
     if level.Anchors.Count = 0 || (level.Anchors[0].Time > 0 && fretted |> Seq.exists (fun (t, _, _) -> t < level.Anchors[0].Time)) then
         let first = fretted |> Seq.tryHead |> Option.map (fun (t, _, _) -> t) |> Option.defaultValue 0
         level.Anchors.Insert(0, Anchor(1y, first, 4y))

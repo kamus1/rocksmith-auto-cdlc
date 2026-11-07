@@ -248,6 +248,35 @@ def build_tones(dlc: Path = DLC_DIR) -> str:
     return rsbuild("tones", str(Path(dlc).resolve()), str(TONES_DIR)).strip()
 
 
+COMMON_FRETS = 22                   # muchas guitarras tienen 21 o 22 trastes; Rocksmith admite hasta 24
+
+
+def high_fret_notes(pkg: Path, bar_times_ms: list[float]) -> list[str]:
+    """Notas por encima del traste COMMON_FRETS en los arrangements generados: posible error de la tab
+    (o una nota que muchas guitarras no pueden tocar). Una línea por arrangement con compás y minuto."""
+    import bisect
+    import xml.etree.ElementTree as ET
+
+    out = []
+    for xml in sorted(pkg.glob("arr_*_RS2.xml")):
+        root = ET.parse(xml).getroot()
+        found = []
+        for level in root.find("levels"):
+            for n in level.find("notes"):
+                found.append((float(n.get("time")), int(n.get("fret"))))
+            for c in level.find("chords"):
+                found += [(float(c.get("time")), int(cn.get("fret"))) for cn in c.findall("chordNote")]
+        found = sorted({(t, f) for t, f in found if f > COMMON_FRETS})
+        if found:
+            where = [f"traste {f} en el compás {bisect.bisect_right(bar_times_ms, t * 1000)} "
+                     f"({int(t // 60)}:{t % 60:04.1f})" for t, f in found[:8]]
+            more = f" y {len(found) - 8} más" if len(found) > 8 else ""
+            kind = xml.stem.removeprefix("arr_").removesuffix("_RS2").capitalize()
+            out.append(f"{kind}: {len(found)} notas por encima del traste {COMMON_FRETS} (muchas guitarras no "
+                       f"llegan; puede ser un error de la tab): {', '.join(where)}{more}")
+    return out
+
+
 @dataclass
 class BuildOptions:
     audio: Path
@@ -367,8 +396,14 @@ def build_song(opts: BuildOptions, on_step: Callable[[int, str], None] = lambda 
         raise PipelineError("RsBuild no informó del .psarc generado", log)
     psarc = Path(m.group(1).strip())
 
+    high = high_fret_notes(out / "pkg", r["bar_times_ms"])
+    for line in high:
+        on_log(f"AVISO: {line}")
+
     report = out / "pkg" / "report.md"
     with report.open("a", encoding="utf-8") as f:
+        if high:
+            f.write("\n## Avisos de la tab\n" + "".join(f"- {line}\n" for line in high))
         f.write(f"\n## Pistas\n- {tracks_desc}\n")
         f.write(f"\n## Tono\n- {tone_desc}\n")
         f.write(f"\n## Alineación\n- {bpm_note}\n")
