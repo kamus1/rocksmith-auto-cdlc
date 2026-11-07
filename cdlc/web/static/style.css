@@ -36,6 +36,7 @@ th, td { text-align: left; padding: 7px 10px; border-bottom: 1px solid var(--lin
 th { color: var(--muted); font-weight: 500; }
 tr.dim td { color: var(--muted); }
 td.c { text-align: center; }
+td.tones { white-space: normal; min-width: 140px; color: var(--muted); }
 
 .grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 12px 16px; }
 label { display: flex; flex-direction: column; gap: 4px; font-size: 13px; color: var(--muted); }

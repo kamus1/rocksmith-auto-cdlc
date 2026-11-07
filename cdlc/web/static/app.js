@@ -70,6 +70,14 @@ const GM = { 24: "Guitarra de nailon", 25: "Guitarra acústica", 26: "Guitarra j
   32: "Bajo acústico", 33: "Bajo (dedos)", 34: "Bajo (púa)", 35: "Bajo fretless", 36: "Bajo slap", 37: "Bajo slap 2",
   38: "Bajo synth", 39: "Bajo synth 2" };
 const NOTE = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"];
+const TONE_NAMES = { clean: "limpio", overdrive: "overdrive", crunch: "crunch", distortion: "distorsión",
+  highgain: "high gain", acoustic: "acústico", fuzz: "fuzz", auto: "automático" };
+// Sonidos de la pista y dónde cambia ("distorsión → limpio (c198) → …"), según la tab
+function toneText(t) {
+  const segs = t.tone_segments || [];
+  if (t.is_percussion || !segs.length) return "—";
+  return segs.map((s, i) => (TONE_NAMES[s.category] || s.category) + (i ? ` (c${s.bar})` : "")).join(" → ");
+}
 
 function setupDrop(dropId, inputId, onFile) {
   const drop = $(dropId), input = $(inputId);
@@ -117,6 +125,7 @@ function renderSetup(r) {
       el("td", { class: "c" }, t.single_notes), el("td", { class: "c" }, t.chords),
       el("td", { class: "c" }, `${Math.round(100 * t.bars_with_notes / Math.max(1, info.bars))} %`),
       el("td", {}, t.is_percussion ? "Batería" : (GM[t.program] || `MIDI ${t.program}`)),
+      el("td", { class: "tones", title: "Cambios de sonido que marca la tab: cada uno será un cambio de tono en el juego" }, toneText(t)),
       el("td", { class: "c" }, usable ? el("input", { type: "radio", name: "lead", value: t.index, checked: t.index === auto.lead }) : ""),
       el("td", { class: "c" }, usable ? el("input", { type: "radio", name: "rhythm", value: t.index, checked: t.index === auto.rhythm }) : ""));
   });
