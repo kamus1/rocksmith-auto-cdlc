@@ -33,6 +33,16 @@
       <p class="muted">Upload the tab and the audio. Alignment, chords, tones and packaging are automatic.</p>
     </div>
 
+    <div id="tone-banner" class="banner" role="status" hidden>
+      <svg viewBox="0 0 24 24" class="ico" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 8h.01M11 12h1v4h1"/></svg>
+      <div class="banner-text">
+        <strong>Tones not scanned yet</strong>
+        <span class="muted small block" id="tone-banner-msg">Scan your installed CDLC to reuse their tones. Otherwise a generic tone is used.</span>
+      </div>
+      <button class="btn sm" id="tone-banner-scan">Scan tones</button>
+      <button class="btn icon banner-close" id="tone-banner-close" aria-label="Close">✕</button>
+    </div>
+
     <div class="card">
       <div class="card-head"><span class="step">1</span><h2>Files</h2></div>
       <div class="drops">

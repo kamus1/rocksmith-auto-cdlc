@@ -92,7 +92,7 @@ $("#btn-tones").addEventListener("click", async () => {
     follow(job_id, (ev) => {
       if (ev.type === "log" || ev.type === "step") log.textContent += (ev.line || ev.title) + "\n";
       if (ev.type === "error") log.textContent += `ERROR: ${ev.message}\n${ev.detail || ""}`;
-      if (ev.type === "done") { log.textContent += `Done: ${ev.result.total} tones.\n`; loadSettings(); }
+      if (ev.type === "done") { log.textContent += `Done: ${ev.result.total} tones.\n`; loadSettings(); loadTones(); }
     });
   } catch (e) { log.textContent = e.message; }
 });
@@ -180,11 +180,40 @@ async function loadTones() {
   try {
     const t = await api("/api/tones");
     const sel = $("#m-tone");
+    sel.replaceChildren(sel.options[0]);
     for (const [k, n] of Object.entries(t.categories)) {
       if (n) sel.append(el("option", { value: k }, `Only ${TONE_NAMES[k] || k} (${n} tones)`));
     }
+    $("#tone-banner").hidden = t.total > 0 || bannerDismissed();
   } catch { /* no library: only "automatic" */ }
 }
+
+// Banner on "New song" while there is no tone library; the ✕ hides it for good (this browser)
+const BANNER_KEY = "cdlc.toneBannerDismissed";
+function bannerDismissed() {
+  try { return localStorage.getItem(BANNER_KEY) === "1"; } catch { return false; }
+}
+$("#tone-banner-close").addEventListener("click", () => {
+  $("#tone-banner").hidden = true;
+  try { localStorage.setItem(BANNER_KEY, "1"); } catch { /* private mode: closed until reload */ }
+});
+$("#tone-banner-scan").addEventListener("click", async () => {
+  const btn = $("#tone-banner-scan"), msg = $("#tone-banner-msg");
+  btn.disabled = true; btn.textContent = "Scanning…";
+  msg.textContent = "Scanning your CDLC…";
+  const fail = (text) => { msg.textContent = text; btn.disabled = false; btn.textContent = "Try again"; };
+  try {
+    const { job_id } = await api("/api/tones/rebuild", { method: "POST" });
+    follow(job_id, (ev) => {
+      if (ev.type === "error") fail(`Could not scan: ${ev.message}`);
+      if (ev.type === "done") {
+        if (!ev.result.total) return fail("No tones found. Check the game folder in Settings.");
+        toast(`${ev.result.total} tones found.`);
+        loadTones();
+      }
+    });
+  } catch (e) { fail(e.message); }
+});
 
 async function updateDeployHint() {
   try {
