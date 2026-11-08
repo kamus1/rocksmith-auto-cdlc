@@ -3,9 +3,9 @@ module RsBuild.Program
 open System
 open System.IO
 
-/// Tab → XML de Rocksmith con los tiempos de compás dados. toneKeys: categoría de sonido → clave del tono;
-/// si la pista cambia de sonido y hay tonos para ello, escribe los cambios de tono. Devuelve el arrangement,
-/// las líneas del informe y las claves de tono usadas (la primera es la base).
+/// Tab → Rocksmith XML with the given bar times. toneKeys: sound category → tone key;
+/// if the track changes sound and there are tones for it, writes the tone changes. Returns the arrangement,
+/// the report lines and the tone keys used (the first one is the base).
 let tabToXml (tab: string) (track: int) (kind: ArrangementBuilder.ArrangementKind) (barTimes: AlphaTab.Model.Score -> int list -> float[] * float[] * string list)
              (songLengthMs: int) (outXml: string) (toneKeys: Map<string, string>) =
     let score = GpImport.load tab
@@ -16,7 +16,7 @@ let tabToXml (tab: string) (track: int) (kind: ArrangementBuilder.ArrangementKin
     let segs =
         GpImport.toneSegments score track order
         |> List.choose (fun (k, tick, c) -> toneKeys.TryFind c |> Option.map (fun key -> k, tick, c, key))
-        // Dos sonidos con el mismo tono comparten clave: entre ellos no hay cambio
+        // Two sounds with the same tone share a key: no change between them
         |> List.fold (fun acc (k, tick, c, key) -> match acc with (_, _, _, cur) :: _ when cur = key -> acc | _ -> (k, tick, c, key) :: acc) []
         |> List.rev
     let keysUsed = segs |> List.map (fun (_, _, _, key) -> key) |> List.distinct
@@ -28,22 +28,22 @@ let tabToXml (tab: string) (track: int) (kind: ArrangementBuilder.ArrangementKin
                   let barTicks = score.MasterBars[order[k]].CalculateDuration(false)
                   let t = int (Math.Round(times[k] + (ends[k] - times[k]) * tick / barTicks))
                   arr.Tones.Changes.Add(Rocksmith2014.XML.ToneChange(key, t, byte (List.findIndex ((=) key) keysUsed)))
-                  yield $"Cambio de tono en el compás {k + 1} ({t / 60000}:{float (t % 60000) / 1000.0:F1}): {key} (la tab marca {c})" ]
+                  yield $"Tone change at bar {k + 1} ({t / 60000}:{float (t % 60000) / 1000.0:F1}): {key} (the tab says {c})" ]
         else []
     Rocksmith2014.XML.Processing.PhraseGenerator.generate arr
     let issues = Rocksmith2014.XML.Processing.ArrangementChecker.checkInstrumental arr
     arr.Save outXml
     let lvl = arr.Levels[0]
     let report =
-        [ $"{kind} = pista {track} ({score.Tracks[track].Name}): {lvl.Notes.Count} notas, {lvl.Chords.Count} acordes ({arr.ChordTemplates.Count} plantillas), {lvl.Anchors.Count} anchors, {arr.Ebeats.Count} beats, {arr.PhraseIterations.Count} phrases"
-          $"Compás 1 en {times[0] / 1000.0:F2} s, último compás termina en {times[times.Length - 1] / 1000.0:F2} s"
+        [ $"{kind} = track {track} ({score.Tracks[track].Name}): {lvl.Notes.Count} notes, {lvl.Chords.Count} chords ({arr.ChordTemplates.Count} templates), {lvl.Anchors.Count} anchors, {arr.Ebeats.Count} beats, {arr.PhraseIterations.Count} phrases"
+          $"Bar 1 at {times[0] / 1000.0:F2} s, last bar ends at {times[times.Length - 1] / 1000.0:F2} s"
           yield! timingNotes
           yield! toneNotes
-          yield! r.Warnings |> List.map (fun w -> "AVISO: " + w)
+          yield! r.Warnings |> List.map (fun w -> "WARNING: " + w)
           yield! issues |> Seq.countBy (fun i -> i.IssueType.ToString()) |> Seq.map (fun (k, c) -> $"Checker: {k} x{c}") ]
     score, arr, report, keysUsed
 
-/// Argumentos --clave valor
+/// --key value arguments
 let private parseArgs (args: string[]) =
     args
     |> Array.chunkBySize 2
@@ -53,22 +53,25 @@ let private parseArgs (args: string[]) =
     |> Map.ofArray
 
 let private usage () =
-    eprintfn "Uso:"
+    eprintfn "Usage:"
     eprintfn "  RsBuild inspect <tab>"
-    eprintfn "  RsBuild timeline <tab> <salida.json>"
-    eprintfn "  RsBuild xml <tab> <pista> <offset_ms> <duracion_ms> <salida.xml>      (tempo escrito)"
+    eprintfn "  RsBuild timeline <tab> <out.json>"
+    eprintfn "  RsBuild xml <tab> <track> <offset_ms> <length_ms> <out.xml>      (written tempo)"
     eprintfn "  RsBuild build --tab T --lead N [--rhythm M] --bar-times J --wav W --out-dir D"
     eprintfn "                --artist A --title T [--album A] [--year Y] [--cover C] [--preview-ms P] [--tone J]"
-    eprintfn "                [--tones-lead \"clean=J|distortion=J\"] [--tones-rhythm ...]   (un tono por sonido de la pista)"
-    eprintfn "                [--dlc-dir D]   (versión siguiente a las de D, en el título y en el nombre del archivo)"
-    eprintfn "                [--variant V]   (variante: va en el título y en la clave, convive con la versión normal)"
-    eprintfn "  RsBuild tones <carpeta_dlc> <salida>     (extrae tonos de guitarra de los .psarc)"
-    eprintfn "  RsBuild pack <proyecto.rs2dlc> <salida_sin_extension>"
+    eprintfn "                [--tones-lead \"clean=J|distortion=J\"] [--tones-rhythm ...]   (one tone per track sound)"
+    eprintfn "                [--dlc-dir D]   (next version after those in D, in the title and file name)"
+    eprintfn "                [--variant V]   (variant: goes in the title and key, coexists with the normal version)"
+    eprintfn "  RsBuild tones <dlc_folder> <out_dir>     (extracts guitar tones from the .psarc files)"
+    eprintfn "  RsBuild pack <project.rs2dlc> <out_without_extension>"
     2
 
 [<EntryPoint>]
 let main argv =
     Console.OutputEncoding <- Text.Encoding.UTF8
+    // Decimal points in messages and reports regardless of the system locale
+    Globalization.CultureInfo.DefaultThreadCurrentCulture <- Globalization.CultureInfo.InvariantCulture
+    Globalization.CultureInfo.CurrentCulture <- Globalization.CultureInfo.InvariantCulture
     match argv with
     | [| "inspect-json"; tab |] ->
         printfn "%s" (GpImport.inspectJson (Path.GetFullPath tab))
@@ -89,7 +92,7 @@ let main argv =
     | [| "tones"; dlcDir; outDir |] ->
         let psarcs = Directory.EnumerateFiles(Path.GetFullPath dlcDir, "*_p.psarc", SearchOption.AllDirectories)
         let entries = Tones.extract psarcs (Path.GetFullPath outDir)
-        printfn "%d tonos extraídos en %s" entries.Count outDir
+        printfn "%d tones extracted to %s" entries.Count outDir
         0
     | [| "pack"; project; outBase |] ->
         let psarc = (Package.buildFromProject (Path.GetFullPath project) (Path.GetFullPath outBase)).GetAwaiter().GetResult()
@@ -97,7 +100,7 @@ let main argv =
         0
     | args when args.Length > 0 && args[0] = "build" ->
         let a = parseArgs args[1..]
-        let req k = match a.TryFind k with Some v -> v | None -> failwith $"Falta --{k}"
+        let req k = match a.TryFind k with Some v -> v | None -> failwith $"Missing --{k}"
         let opt k d = a.TryFind k |> Option.defaultValue d
         let outDir = Path.GetFullPath(req "out-dir")
         Directory.CreateDirectory outDir |> ignore
@@ -111,11 +114,11 @@ let main argv =
             let gaps =
                 [ for k in 0 .. ends.Length - 1 do
                       if times[k + 1] - ends[k] > 1.0 then
-                          yield $"ALINEACIÓN: {(times[k + 1] - ends[k]) / 1000.0:F1} s de audio que no está en la tab antes del compás {k + 2} (queda sin notas)" ]
+                          yield $"ALIGNMENT: {(times[k + 1] - ends[k]) / 1000.0:F1} s of audio not in the tab before bar {k + 2} (left without notes)" ]
             let notes =
                 gaps @
                 (if suspicious.IsEmpty then []
-                 else [ $"ALINEACIÓN: {suspicious.Length} compases con tempo >10%% distinto de la mediana: " +
+                 else [ $"ALIGNMENT: {suspicious.Length} bars with tempo >10%% off the median: " +
                         (suspicious |> List.truncate 30 |> List.map (sprintf "c%d") |> String.concat ", ") ])
             times, ends, notes
         let tab = Path.GetFullPath(req "tab")
@@ -126,7 +129,7 @@ let main argv =
               | None -> () ]
         let toolRoot = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", ".."))
         let defaultTone = Path.GetFullPath(opt "tone" (Path.Combine(toolRoot, "assets", "tones", "lead_default.json")))
-        // --tones-lead / --tones-rhythm "categoría=archivo|categoría=archivo": un tono por sonido de la pista
+        // --tones-lead / --tones-rhythm "category=file|category=file": one tone per track sound
         let toneFiles (kind: ArrangementBuilder.ArrangementKind) =
             match a.TryFind $"tones-{(string kind).ToLowerInvariant()}" with
             | None | Some "" -> Map.empty
@@ -138,12 +141,12 @@ let main argv =
                 let name = (string kind).ToLowerInvariant()
                 let xml = Path.Combine(outDir, $"arr_{name}_RS2.xml")
                 let files = toneFiles kind
-                // La clave es la del primer sonido que usa cada archivo: mismo archivo, misma clave
+                // The key is that of the first sound using each file: same file, same key
                 let keyOf (c: string) =
                     let first = files |> Map.toList |> List.find (fun (_, f) -> f = files[c]) |> fst
                     $"{name}_{first}"
                 let score, arr, report, keysUsed = tabToXml tab track kind timing songLengthMs xml (files |> Map.map (fun c _ -> keyOf c))
-                // Un solo sonido: el tono de --tone (o el de su categoría, si se dio) con la clave de siempre
+                // Single sound: the --tone tone (or its category's, if given) with the usual key
                 let tones =
                     if keysUsed.Length > 1 then
                         keysUsed |> List.map (fun key -> key, files[key.Substring(name.Length + 1)])
@@ -160,7 +163,7 @@ let main argv =
               Package.Year = int (opt "year" "0")
               Package.Version = 0
               Package.Variant = opt "variant" "" }
-        // Versión: la siguiente a las que haya en la carpeta del juego (--dlc-dir); va en el título y en el archivo
+        // Version: the next one after those in the game folder (--dlc-dir); goes in the title and file name
         let dlcKey = Package.dlcKeyOf info
         let version = Package.nextVersion (opt "dlc-dir" "") dlcKey
         let info = { info with Version = version }
@@ -174,8 +177,8 @@ let main argv =
         let reportPath = Path.Combine(outDir, "report.md")
         File.WriteAllLines(reportPath, [ $"# {info.Artist} - {info.Title}"; "" ] @ (report |> List.map (fun l -> "- " + l)))
         report |> List.iter (printfn "%s")
-        printfn "Proyecto: %s" project
+        printfn "Project:  %s" project
         printfn "PSARC:    %s" psarc
-        printfn "Informe:  %s" reportPath
+        printfn "Report:   %s" reportPath
         0
     | _ -> usage ()

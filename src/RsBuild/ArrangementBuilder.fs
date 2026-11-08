@@ -5,10 +5,10 @@ open System.Collections.Generic
 open AlphaTab.Model
 open Rocksmith2014.XML
 
-/// Tiempos (ms) de inicio de cada compás en orden de reproducción, más el final del último (longitud = compases + 1).
+/// Start times (ms) of each bar in playback order, plus the end of the last one (length = bars + 1).
 type BarTimes = float[]
 
-/// Inicio de compases a partir del tempo escrito en la tab, desplazado offsetMs.
+/// Bar starts from the tab's written tempo, shifted by offsetMs.
 let barTimesFromTempo (score: Score) (order: int list) (offsetMs: float) : BarTimes =
     let mutable tempo = 120.0
     let mutable t = offsetMs
@@ -22,8 +22,8 @@ let barTimesFromTempo (score: Score) (order: int list) (offsetMs: float) : BarTi
 let private standardMidi = [| 40; 45; 50; 55; 59; 64 |]
 let private bassStandardMidi = [| 28; 33; 38; 43 |]
 
-/// Offsets de afinación en semitonos respecto a E estándar (cuerda grave primero).
-/// Una pista de 4 cuerdas (bajo) se toca en las 4 cuerdas graves de la guitarra, una octava más arriba.
+/// Tuning offsets in semitones relative to E standard (low string first).
+/// A 4-string (bass) track is played on the guitar's 4 low strings, one octave up.
 let tuningOffsets (staff: Staff) =
     let t = staff.StringTuning.Tunings |> Seq.map int |> Seq.rev |> Seq.toArray
     let reference = if t.Length = 4 then bassStandardMidi else standardMidi
@@ -31,7 +31,7 @@ let tuningOffsets (staff: Staff) =
 
 let private pcNames = [| "C"; "C#"; "D"; "Eb"; "E"; "F"; "F#"; "G"; "Ab"; "A"; "Bb"; "B" |]
 
-/// Sufijo según los intervalos sobre la fundamental (clases de altura relativas).
+/// Suffix by the intervals over the root (relative pitch classes).
 let private chordSuffixes =
     [ set [ 0; 7 ], "5"
       set [ 0; 4; 7 ], ""
@@ -48,15 +48,15 @@ let private chordSuffixes =
       set [ 0; 4; 10 ], "7" ]
     |> Map.ofList
 
-/// Nombre del acorde a partir de la altura MIDI de cada nota (cuerda grave primero).
-/// Se prueba como fundamental la nota más grave y, si no encaja, el resto (inversiones, p. ej. "C/G").
+/// Chord name from the MIDI pitch of each note (low string first).
+/// The lowest note is tried as the root and, if it does not fit, the others (inversions, e.g. "C/G").
 let chordName (pitches: int list) =
     match pitches with
     | [] -> ""
     | _ ->
         let bass = List.min pitches % 12
         let pcs = pitches |> List.map (fun p -> p % 12) |> Set.ofList
-        // Dos clases de altura: solo se nombra si es un power chord (quinta)
+        // Two pitch classes: only named if it is a power chord (fifth)
         if pcs.Count = 1 then ""
         elif pcs.Count = 2 && not (pcs.Contains((bass + 7) % 12)) then ""
         else
@@ -70,8 +70,8 @@ let chordName (pitches: int list) =
                 |> Seq.tryPick (fun r -> tryRoot r |> Option.map (fun n -> $"{n}/{pcNames[bass]}"))
                 |> Option.defaultValue ""
 
-/// Digitación simple: traste mínimo = dedo 1 (cejilla si se repite), el resto según la distancia.
-/// Si dos cuerdas comparten distancia > 0, se reparten dedos consecutivos (power chord 1-3-4).
+/// Simple fingering: lowest fret = finger 1 (barre if repeated), the rest by distance.
+/// If two strings share a distance > 0, consecutive fingers are used (power chord 1-3-4).
 let chordFingers (frets: sbyte[]) =
     let fingers = Array.create frets.Length -1y
     let fretted = frets |> Array.indexed |> Array.filter (fun (_, f) -> f > 0y)
@@ -144,28 +144,28 @@ let private makeNote (ev: Ev) (n: AlphaTab.Model.Note) (tieExtra: int) =
             rn.MaxBend <- bends |> Seq.map (fun b -> b.Step) |> Seq.max
     rn
 
-/// Resultado de construir el arrangement, con avisos para el informe.
+/// Result of building the arrangement, with warnings for the report.
 type BuildResult =
     { Arrangement: InstrumentalArrangement
       Warnings: string list }
 
-/// Construye el arrangement Lead desde una pista de la tab y los tiempos de cada compás.
-/// barEnds[k] es el fin real del compás k: igual a barTimes[k + 1] salvo si después hay un hueco (audio
-/// que no está en la tab), que queda sin notas y con beats al mismo tempo.
+/// Builds the arrangement from a tab track and the time of each bar.
+/// barEnds[k] is the actual end of bar k: equal to barTimes[k + 1] unless a gap follows (audio
+/// not in the tab), which is left without notes and with beats at the same tempo.
 let build (score: Score) (trackIndex: int) (kind: ArrangementKind) (order: int list) (barTimes: BarTimes) (barEnds: float[])
           (songLengthMs: int) : BuildResult =
     let staff = score.Tracks[trackIndex].Staves[0]
     let warnings = ResizeArray<string>()
     match staff.StringTuning.Tunings.Count with
     | 6 -> ()
-    | 4 -> warnings.Add "Pista de 4 cuerdas (bajo): se toca en las 4 cuerdas graves de la guitarra, una octava más arriba."
-    | n -> warnings.Add $"La pista tiene {n} cuerdas; solo se usan 6."
+    | 4 -> warnings.Add "4-string track (bass): played on the guitar's 4 low strings, one octave up."
+    | n -> warnings.Add $"The track has {n} strings; only 6 are used."
 
     let timeAt (k: int) (tick: float) (barTicks: float) =
         let a, b = barTimes[k], barEnds[k]
         int (Math.Round(a + (b - a) * (tick / barTicks)))
 
-    // 1. Eventos (beats con notas) en orden de reproducción
+    // 1. Events (beats with notes) in playback order
     let events = ResizeArray<Ev>()
     order |> List.iteri (fun k mbIndex ->
         let mb = score.MasterBars[mbIndex]
@@ -182,9 +182,9 @@ let build (score: Score) (trackIndex: int) (kind: ArrangementKind) (order: int l
                       Notes = beat.Notes |> Seq.filter (fun n -> int n.String >= 1 && int n.String <= 6) |> Seq.toList
                       Beat = beat })
 
-    // 2. Ligaduras: la nota ligada no se toca, alarga el sustain de la de origen
-    let tieExtra = Dictionary<int * int, int>()   // (índice de evento, cuerda) -> ms extra
-    let lastOnString = Dictionary<int, int>()     // cuerda -> índice del último evento que la tocó
+    // 2. Ties: the tied note is not played, it extends the sustain of the origin note
+    let tieExtra = Dictionary<int * int, int>()   // (event index, string) -> extra ms
+    let lastOnString = Dictionary<int, int>()     // string -> index of the last event that played it
     for i in 0 .. events.Count - 1 do
         for n in events[i].Notes do
             let s = int n.String
@@ -197,10 +197,10 @@ let build (score: Score) (trackIndex: int) (kind: ArrangementKind) (order: int l
             else
                 lastOnString[s] <- i
 
-    // Altura MIDI de cada cuerda al aire (grave primero), para nombrar acordes
+    // MIDI pitch of each open string (low first), for naming chords
     let openPitches = staff.StringTuning.Tunings |> Seq.map int |> Seq.rev |> Seq.toArray
 
-    // 3. Notas, acordes y handshapes
+    // 3. Notes, chords and handshapes
     let arr = InstrumentalArrangement()
     let level = Level(0y)
     let templates = Dictionary<string, int16>()
@@ -239,7 +239,7 @@ let build (score: Score) (trackIndex: int) (kind: ArrangementKind) (order: int l
             let sustain = chord.ChordNotes |> Seq.map (fun n -> n.Sustain) |> Seq.max
             level.HandShapes.Add(HandShape(id, ev.Time, ev.Time + max sustain (max 50 (ev.DurMs - 10))))
 
-    // 4. Anchors: ventana de 4 trastes que se mueve cuando una nota cae fuera
+    // 4. Anchors: a 4-fret window that moves when a note falls outside it
     let fretted =
         Seq.append
             (level.Notes |> Seq.map (fun n -> n.Time, int n.Fret, int n.Fret))
@@ -247,8 +247,8 @@ let build (score: Score) (trackIndex: int) (kind: ArrangementKind) (order: int l
                 let fs = arr.ChordTemplates[int c.ChordId].Frets |> Array.filter (fun f -> f > 0y) |> Array.map int
                 if fs.Length = 0 then c.Time, 0, 0 else c.Time, Array.min fs, Array.max fs))
         |> Seq.sortBy (fun (t, _, _) -> t)
-    //    La ventana no puede pasar del traste 24 (como en los charts oficiales: la última de 4 es la 21–24);
-    //    si no, con notas en el 22–24 la cámara se va fuera del mástil.
+    //    The window cannot go past fret 24 (as in official charts: the last 4-fret one is 21–24);
+    //    otherwise, with notes at 22–24 the camera goes off the neck.
     let lastFret = 24
     let mutable anchor = 0
     let mutable anchorWidth = 4
@@ -263,9 +263,9 @@ let build (score: Score) (trackIndex: int) (kind: ArrangementKind) (order: int l
         let first = fretted |> Seq.tryHead |> Option.map (fun (t, _, _) -> t) |> Option.defaultValue 0
         level.Anchors.Insert(0, Anchor(1y, first, 4y))
 
-    // 5. Beats (Ebeats): numerador del compás repartido uniformemente.
-    //    Antes del primer compás se rellenan compases de count-in hacia atrás hasta t = 0.
-    let beatTimes = ResizeArray<float * bool>()   // (tiempo, es downbeat)
+    // 5. Beats (Ebeats): the bar's numerator spread evenly.
+    //    Before the first bar, count-in bars are filled backwards down to t = 0.
+    let beatTimes = ResizeArray<float * bool>()   // (time, is downbeat)
     let firstNum = int score.MasterBars[List.head order].TimeSignatureNumerator
     let firstBeatLen = (barTimes[1] - barTimes[0]) / float firstNum
     let countIn = ResizeArray<float * bool>()
@@ -280,7 +280,7 @@ let build (score: Score) (trackIndex: int) (kind: ArrangementKind) (order: int l
         let num = int score.MasterBars[mbIndex].TimeSignatureNumerator
         for b in 0 .. num - 1 do
             beatTimes.Add(barTimes[k] + (barEnds[k] - barTimes[k]) * float b / float num, (b = 0))
-        // Hueco: compases sin notas al tempo del compás anterior hasta el siguiente compás de la tab
+        // Gap: bars without notes at the previous bar's tempo up to the next tab bar
         let beatLen = (barEnds[k] - barTimes[k]) / float num
         let mutable t = barEnds[k]
         let mutable b = 0
@@ -293,9 +293,9 @@ let build (score: Score) (trackIndex: int) (kind: ArrangementKind) (order: int l
         if isDown then measure <- measure + 1s
         arr.Ebeats.Add(Ebeat(int (Math.Round t), (if isDown then measure else -1s)))
     if countIn.Count < firstNum then
-        warnings.Add $"Menos de un compás de count-in ({barTimes[0] / 1000.0:F2} s antes del primer compás); añade silencio al inicio del audio."
+        warnings.Add $"Less than one bar of count-in ({barTimes[0] / 1000.0:F2} s before the first bar); add silence at the start of the audio."
 
-    // 6. Metadatos
+    // 6. Metadata
     arr.Levels.Add level
     let md = arr.MetaData
     md.Arrangement <- (match kind with Lead -> "Lead" | Rhythm -> "Rhythm")

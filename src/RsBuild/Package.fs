@@ -15,24 +15,24 @@ type SongInfo =
       Title: string
       Album: string
       Year: int
-      /// Versión que se muestra en el título, " (vN)"; 0 = sin versión. La clave del DLC sale del título sin ella.
+      /// Version shown in the title, " (vN)"; 0 = no version. The DLC key comes from the title without it.
       Version: int
-      /// Variante ("Lead en Guitar 1"…): va en el título y en la clave, para que conviva con la versión normal
+      /// Variant ("Lead on Guitar 1"…): goes in the title and key, so it coexists with the normal version
       Variant: string }
 
-/// Clave del DLC: la de DLC Builder (artista y título) más, si hay variante, sus primeras letras.
+/// DLC key: DLC Builder's (artist and title) plus, if there is a variant, its first letters.
 let dlcKeyOf (info: SongInfo) =
     let key = DLCKey.create "rsbuild" info.Artist info.Title
     let v: string = Rocksmith2014.DLCProject.StringValidator.dlcKey (if isNull info.Variant then "" else info.Variant)
     if v.Length = 0 then key else key + v.Substring(0, min 5 v.Length)
 
-/// Título que se ve en el juego: título, [variante] y (vN).
+/// Title shown in game: title, [variant] and (vN).
 let displayTitle (info: SongInfo) =
     let v = if String.IsNullOrWhiteSpace info.Variant then "" else $" [{info.Variant.Trim()}]"
     let n = if info.Version > 0 then $" (v{info.Version})" else ""
     info.Title + v + n
 
-/// Siguiente versión de un DLC en la carpeta del juego: 1 + la mayor <clave>_vN_p.psarc que haya.
+/// Next version of a DLC in the game folder: 1 + the highest existing <key>_vN_p.psarc.
 let nextVersion (dlcDir: string) (dlcKey: string) =
     if String.IsNullOrEmpty dlcDir || not (Directory.Exists dlcDir) then 1
     else
@@ -56,7 +56,7 @@ let buildConfig author =
       IdResetConfig = None
       ProgressReporter = None }
 
-/// Construye el .psarc de PC a partir de un .rs2dlc (los .wem deben existir). Devuelve la ruta del .psarc.
+/// Builds the PC .psarc from a .rs2dlc (the .wem files must exist). Returns the .psarc path.
 let buildFromProject (projectPath: string) (outBase: string) =
     task {
         let! project = DLCProject.load projectPath
@@ -64,7 +64,7 @@ let buildFromProject (projectPath: string) (outBase: string) =
         return outBase + "_p.psarc"
     }
 
-/// Crea la preview (28 s desde previewStartMs) y convierte canción y preview a .wem con Wwise.
+/// Creates the preview (28 s from previewStartMs) and converts song and preview to .wem with Wwise.
 let convertAudio (wav: string) (previewStartMs: float) =
     let previewWav = Path.Combine(Path.GetDirectoryName wav, Path.GetFileNameWithoutExtension wav + "_preview.wav")
     Preview.create wav previewWav (TimeSpan.FromMilliseconds previewStartMs)
@@ -78,19 +78,19 @@ let private sortable (s: string) =
     JsonObject([ Collections.Generic.KeyValuePair<string, JsonNode>("Value", JsonValue.Create s)
                  Collections.Generic.KeyValuePair<string, JsonNode>("SortValue", JsonValue.Create sortValue) ])
 
-/// Un arrangement para el proyecto: XML, tipo (Lead/Rhythm), afinación y tonos (clave, archivo .json del
-/// tono; el primero es el base). Con más de uno, el XML lleva los cambios de tono con esas claves.
+/// One arrangement for the project: XML, kind (Lead/Rhythm), tuning and tones (key, tone .json file;
+/// the first is the base). With more than one, the XML carries the tone changes with those keys.
 type ArrangementSpec =
     { Xml: string
       Kind: ArrangementBuilder.ArrangementKind
       Tuning: int16[]
       Tones: (string * string) list }
 
-/// Escribe el proyecto .rs2dlc (formato de DLC Builder). Devuelve su ruta.
+/// Writes the .rs2dlc project (DLC Builder format). Returns its path.
 let writeProject (dir: string) (info: SongInfo) (arrangements: ArrangementSpec list) (wav: string) (previewWav: string)
                  (previewStartMs: float) (cover: string) =
     let dlcKey = dlcKeyOf info
-    // Un tono por clave distinta; clave y nombre deben coincidir con BaseTone/Tones de los arrangements
+    // One tone per distinct key; key and name must match the arrangements' BaseTone/Tones
     let tones =
         arrangements |> List.collect (fun a -> a.Tones) |> List.distinctBy fst
         |> List.map (fun (key, path) ->
@@ -128,9 +128,9 @@ let writeProject (dir: string) (info: SongInfo) (arrangements: ArrangementSpec l
     project["AlbumName"] <- sortable info.Album
     project["Year"] <- JsonValue.Create info.Year
     project["AlbumArtFile"] <- JsonValue.Create(rel cover)
-    // Volumen como DLC Builder: sonoridad integrada (BS.1770) llevada a -16 LUFS. Los tonos de los CDLC están
-    // equilibrados contra esa referencia; con un volumen fijo, la música queda más fuerte o más floja que
-    // el tono según lo alto que esté grabado el audio.
+    // Volume like DLC Builder: integrated loudness (BS.1770) brought to -16 LUFS. CDLC tones are
+    // balanced against that reference; with a fixed volume, the music ends up louder or quieter than
+    // the tone depending on how loud the audio was recorded.
     let volume (path: string) = Rocksmith2014.Audio.Volume.calculate path
     project["AudioFile"] <- JsonObject([ Collections.Generic.KeyValuePair<string, JsonNode>("Path", JsonValue.Create(rel wav))
                                          Collections.Generic.KeyValuePair<string, JsonNode>("Volume", JsonValue.Create(volume wav)) ])

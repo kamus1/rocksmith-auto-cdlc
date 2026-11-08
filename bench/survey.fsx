@@ -10,7 +10,7 @@ open System.Text.Json
 open Rocksmith2014.PSARC
 open Rocksmith2014.Common
 open Rocksmith2014.Common.Manifest
-// Uso: survey.fsx <lista.txt> <salida.jsonl>  — una línea JSON por canción con metadatos y ebeats del Lead
+// Usage: survey.fsx <list.txt> <out.jsonl>  — one JSON line per song with metadata and the Lead ebeats
 let paths = File.ReadAllLines fsi.CommandLineArgs[1]
 use out = new StreamWriter(fsi.CommandLineArgs[2])
 let tmp = Path.Combine(Path.GetTempPath(), "rsbench.sng")

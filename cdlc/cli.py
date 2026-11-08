@@ -1,14 +1,14 @@
-"""CLI del generador de CDLC: audio + tab de Guitar Pro → .psarc de Rocksmith 2014.
+"""CDLC generator CLI: audio + Guitar Pro tab → Rocksmith 2014 .psarc.
 
-Uso:
-  python -m cdlc build --audio cancion.mp3 --tab cancion.gp
+Usage:
+  python -m cdlc build --audio song.mp3 --tab song.gp
                        [--lead N] [--rhythm M | --no-rhythm] [--artist A --title T --album A --year Y]
-                       [--tone categoría|archivo] [--cover img] [--name carpeta] [--no-deploy] [--no-lookup]
+                       [--tone category|file] [--cover img] [--name folder] [--no-deploy] [--no-lookup]
   python -m cdlc tones
-  python -m cdlc inspect --tab cancion.gp
+  python -m cdlc inspect --tab song.gp
   python -m cdlc web [--port 8000] [--no-browser]
 
-La lógica está en pipeline.py; aquí solo se leen los argumentos y se imprime el progreso.
+The logic lives in pipeline.py; this only parses arguments and prints progress.
 """
 
 import argparse
@@ -43,10 +43,10 @@ def cmd_web(a: argparse.Namespace) -> None:
     import uvicorn
 
     url = f"http://127.0.0.1:{a.port}"
-    print(f"Web local en {url} (Ctrl+C para salir)")
+    print(f"Local web app at {url} (Ctrl+C to quit)")
     if not a.no_browser:
         threading.Timer(1.5, webbrowser.open, [url]).start()
-    # Solo localhost: necesita Wwise y la carpeta dlc/ de este PC, y no debe exponerse a la red
+    # Localhost only: it needs Wwise and this PC's dlc/ folder, and must not be exposed to the network
     uvicorn.run("cdlc.web.app:app", host="127.0.0.1", port=a.port, log_level="warning")
 
 
@@ -54,40 +54,40 @@ def main(argv: list[str] | None = None) -> None:
     for stream in (sys.stdout, sys.stderr):
         if hasattr(stream, "reconfigure"):
             stream.reconfigure(encoding="utf-8", errors="replace")
-    p = argparse.ArgumentParser(prog="cdlc", description="Audio + tab Guitar Pro → CDLC de Rocksmith 2014")
+    p = argparse.ArgumentParser(prog="cdlc", description="Audio + Guitar Pro tab → Rocksmith 2014 CDLC")
     sub = p.add_subparsers(dest="cmd", required=True)
 
-    b = sub.add_parser("build", help="genera el .psarc y lo copia a dlc/")
+    b = sub.add_parser("build", help="generate the .psarc and copy it to dlc/")
     b.add_argument("--audio", required=True)
     b.add_argument("--tab", required=True)
-    b.add_argument("--lead", type=int, help="pista de la tab para el arrangement Lead (por defecto: automática)")
-    b.add_argument("--rhythm", type=int, help="pista para el arrangement Rhythm (por defecto: automática)")
-    b.add_argument("--no-rhythm", action="store_true", help="no generar arrangement Rhythm")
+    b.add_argument("--lead", type=int, help="tab track for the Lead arrangement (default: automatic)")
+    b.add_argument("--rhythm", type=int, help="track for the Rhythm arrangement (default: automatic)")
+    b.add_argument("--no-rhythm", action="store_true", help="do not generate a Rhythm arrangement")
     b.add_argument("--artist")
     b.add_argument("--title")
     b.add_argument("--album")
     b.add_argument("--year", type=int)
-    b.add_argument("--cover", help="portada (png/jpg)")
-    b.add_argument("--tone", help=f"archivo de tono o categoría ({', '.join(TONE_CATEGORIES)}); "
-                                  "por defecto: misma canción o mismo artista de la biblioteca")
-    b.add_argument("--name", help="nombre de la carpeta en build/")
-    b.add_argument("--variant", help="variante: va en el título y convive con la versión normal (p. ej. \"Lead Guitar 1\")")
-    b.add_argument("--pad", type=float, default=4.0, help="segundos de silencio al inicio (count-in)")
-    b.add_argument("--no-deploy", action="store_true", help="no copiar a la carpeta dlc del juego")
-    b.add_argument("--no-lookup", action="store_true", help="no buscar álbum, año y portada en iTunes")
+    b.add_argument("--cover", help="cover art (png/jpg)")
+    b.add_argument("--tone", help=f"tone file or category ({', '.join(TONE_CATEGORIES)}); "
+                                  "default: same song or same artist from the library")
+    b.add_argument("--name", help="folder name in build/")
+    b.add_argument("--variant", help="variant: goes in the title and coexists with the normal version (e.g. \"Lead Guitar 1\")")
+    b.add_argument("--pad", type=float, default=4.0, help="seconds of silence at the start (count-in)")
+    b.add_argument("--no-deploy", action="store_true", help="do not copy to the game's dlc folder")
+    b.add_argument("--no-lookup", action="store_true", help="do not look up album, year and cover on iTunes")
     b.set_defaults(func=cmd_build)
 
-    t = sub.add_parser("tones", help="extrae la biblioteca de tonos de los CDLC instalados")
-    t.add_argument("--dlc", default=None, help="carpeta dlc/ (por defecto, la de config.json o la de Steam)")
+    t = sub.add_parser("tones", help="extract the tone library from the installed CDLC")
+    t.add_argument("--dlc", default=None, help="dlc/ folder (default: the one in config.json or Steam's)")
     t.set_defaults(func=cmd_tones)
 
-    i = sub.add_parser("inspect", help="muestra pistas, afinaciones y compases de la tab")
+    i = sub.add_parser("inspect", help="show the tab's tracks, tunings and bars")
     i.add_argument("--tab", required=True)
     i.set_defaults(func=cmd_inspect)
 
-    w = sub.add_parser("web", help="abre la interfaz web local (http://127.0.0.1:8000)")
+    w = sub.add_parser("web", help="open the local web UI (http://127.0.0.1:8000)")
     w.add_argument("--port", type=int, default=8000)
-    w.add_argument("--no-browser", action="store_true", help="no abrir el navegador")
+    w.add_argument("--no-browser", action="store_true", help="do not open the browser")
     w.set_defaults(func=cmd_web)
 
     a = p.parse_args(argv)

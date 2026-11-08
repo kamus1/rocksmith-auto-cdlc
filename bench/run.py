@@ -1,12 +1,12 @@
-"""Banco de pruebas de la alineación con CDLC reales sincronizados a mano.
+"""Alignment benchmark against real, hand-synced CDLCs.
 
-Para cada canción de build/bench/benchmark.json (preparada con select_v1.py o select_new_val.py + extract.fsx):
-  1. Convierte el audio .wem a WAV.
-  2. Construye una "tab" a tempo fijo con la misma estructura de compases y las mismas notas
-     (Lead, Rhythm, Bass), olvidando los tiempos reales.
-  3. Alinea con cdlc.align y compara cada inicio de compás con el del chart real.
+For each song in build/bench/benchmark.json (prepared with select_v1.py or select_new_val.py + extract.fsx):
+  1. Converts the .wem audio to WAV.
+  2. Builds a fixed-tempo "tab" with the same bar structure and the same notes
+     (Lead, Rhythm, Bass), discarding the real timings.
+  3. Aligns it with cdlc.align and compares each bar start with the real chart's.
 
-Uso: .venv/Scripts/python bench/run.py [--set desarrollo|validación|todos] [--workers 4] [--tag nombre] [--quitar 2]
+Usage: .venv/Scripts/python bench/run.py [--set dev|validation|all] [--workers 4] [--tag name] [--drop 2]
 """
 
 import argparse
@@ -46,12 +46,12 @@ def max_level(root):
 
 
 def full_events(root) -> list:
-    """Notas del chart completo, [(elemento con string/fret/sustain/bendValues, tiempo en ms)], como en una
-    tab de Guitar Pro:
-    - cada frase en el nivel de su maxDifficulty (en los charts oficiales cada frase tiene el suyo; un solo
-      nivel deja frases enteras en versión reducida o vacías, p. ej. la intro de Audioslave);
-    - los acordes repetidos sin <chordNote> (solo chordId) expandidos con su chordTemplate: si no, se
-      perdía entre el 30 y el 90 % de los acordes de muchas canciones."""
+    """Notes of the full chart, [(element with string/fret/sustain/bendValues, time in ms)], as in a
+    Guitar Pro tab:
+    - each phrase at the level of its maxDifficulty (in official charts each phrase has its own; a single
+      level leaves whole phrases reduced or empty, e.g. the Audioslave intro);
+    - repeated chords without <chordNote> (chordId only) expanded from their chordTemplate: otherwise
+      30 to 90 % of the chords in many songs were lost."""
     levels = {int(l.get("difficulty")): l for l in root.find("levels")}
     tmpl = list(root.find("chordTemplates"))
     phrases = list(root.find("phrases"))
@@ -86,10 +86,10 @@ def full_events(root) -> list:
 
 
 def build_timeline(d: Path, drop: int = 0, tag: str = "") -> tuple[Path, np.ndarray]:
-    """Tab a tempo fijo desde los XML de referencia. Devuelve (timeline.json, tiempos reales de cada compás).
+    """Fixed-tempo tab from the reference XMLs. Returns (timeline.json, real time of each bar).
 
-    drop > 0 quita esos compases de la tab hacia el 60 % de la canción (el audio los conserva): simula una
-    tab con una repetición de menos que la grabación."""
+    drop > 0 removes that many bars from the tab around 60 % of the song (the audio keeps them): simulates a
+    tab with one repeat fewer than the recording."""
     xmls = sorted(d.glob("*.xml"))
     lead = next((x for x in xmls if x.stem.endswith("_lead")), None) or next(x for x in xmls if "_rhythm" in x.stem or "_combo" in x.stem)
     r = ET.parse(lead).getroot()
@@ -98,11 +98,11 @@ def build_timeline(d: Path, drop: int = 0, tag: str = "") -> tuple[Path, np.ndar
     q = float(np.median(np.diff(beats)))
     idx_down = np.where(down)[0]
     truth = np.append(beats[idx_down], beats[-1] + q)
-    # Algunos charts marcan los compases irregulares en corcheas (7/8 con 7 beats de media negra).
-    # Una tab los escribiría con su valor: cada intervalo de ~½ negra (o menos) cuenta como tal.
-    # Los intervalos largos no se tocan (pueden ser ritardandos o calderones, que la tab no escribe).
+    # Some charts mark irregular bars in eighth notes (7/8 as 7 beats of half a quarter note).
+    # A tab would write them at their real value: each interval of ~½ quarter (or less) counts as such.
+    # Long intervals are left alone (they may be ritardandos or fermatas, which the tab doesn't write).
     units = np.minimum(1.0, 2.0 ** np.round(np.log2(np.diff(beats) / q)))
-    pos = np.concatenate([[0.0], np.cumsum(units)]) * q          # posición nominal de cada beat
+    pos = np.concatenate([[0.0], np.cumsum(units)]) * q          # nominal position of each beat
     bar_starts = np.append(pos[idx_down], pos[-1] + q)
     bar_quarters = np.diff(bar_starts) / q
 
@@ -124,8 +124,8 @@ def build_timeline(d: Path, drop: int = 0, tag: str = "") -> tuple[Path, np.ndar
             s, f = int(n.get("string")), int(n.get("fret"))
             sus = float(n.get("sustain", 0) or 0) * 1000
             midi = base[s] + offs[s] + f
-            # Trozos de altura constante: cortes en cada punto del bend (step en tonos) y en cada inicio de
-            # compás, como quedaría en Guitar Pro con ligaduras. El primero es el ataque; el resto, "held".
+            # Constant-pitch pieces: cuts at each bend point (step in whole tones) and at each bar start,
+            # as Guitar Pro would write it with ties. The first is the attack; the rest are "held".
             t0, t1 = nominal(t), nominal(t + sus)
             bv = n.find("bendValues")
             bend = sorted((float(v.get("time")) * 1000, float(v.get("step", 0) or 0)) for v in bv) if bv is not None else []
@@ -154,13 +154,13 @@ def run_song(song: dict, kwargs: dict, drop: int = 0) -> dict:
     t0 = time.time()
     try:
         wav = wem_to_wav(d)
-        # Archivo propio de este proceso: dos bancos a la vez no deben pisarse la tab
+        # Per-process file: two concurrent benchmark runs must not overwrite each other's tab
         tl, truth = build_timeline(d, drop, f"_{os.getpid()}")
         res = align.align_hybrid(tl, wav, d / f"bt_bench_{os.getpid()}.json", **kwargs)
         (d / f"bt_bench_{os.getpid()}.json").unlink()
         T = np.array(res["bar_times_ms"])
         n = min(len(T), len(truth))
-        # Solo compases con notas: en los vacíos (count-in, intros sin la guitarra) no hay nada que alinear
+        # Only bars with notes: empty ones (count-in, intros without guitar) have nothing to align
         tlj = json.loads(tl.read_text())
         tl.unlink()
         st = np.array(tlj["bar_starts_ms"])
@@ -178,40 +178,40 @@ def run_song(song: dict, kwargs: dict, drop: int = 0) -> dict:
                     over50=float(np.mean(a > 50)), over_half_beat=float(np.mean(a > beat / 2)),
                     bias=float(np.median(err)), gaps=res.get("gaps", []), seconds=round(time.time() - t0),
                     refine_gain=res.get("refine_gain"), refine_chroma_change=res.get("refine_chroma_change"))
-    except Exception as e:  # noqa: BLE001 — una canción rota no debe parar el banco
+    except Exception as e:  # noqa: BLE001 — one broken song must not stop the benchmark
         return dict(song=f"{song['artist']} - {song['title']}", set=song["set"], error=repr(e)[:200])
 
 
 def main() -> None:
     p = argparse.ArgumentParser()
-    p.add_argument("--set", default="desarrollo", help="desarrollo, validación, todos u otra etiqueta de benchmark.json")
+    p.add_argument("--set", default="dev", help="dev, validation, all, or another label from benchmark.json")
     p.add_argument("--workers", type=int, default=4)
     p.add_argument("--tag", default="")
-    p.add_argument("--quitar", type=int, default=0, help="quitar N compases de la tab hacia el 60 %% (estructura distinta)")
-    p.add_argument("--params", default="{}", help='parámetros de align_hybrid en JSON, p. ej. {"onset_lag_ms": 20}')
+    p.add_argument("--drop", type=int, default=0, help="drop N bars from the tab around 60 %% (different structure)")
+    p.add_argument("--params", default="{}", help='align_hybrid parameters as JSON, e.g. {"onset_lag_ms": 20}')
     a = p.parse_args()
     songs = json.loads((ROOT / "build" / "bench" / "benchmark.json").read_text(encoding="utf-8"))
     slug = lambda t: __import__("re").sub(r"[^a-z0-9]+", "-", t.lower()).strip("-")
     for s in songs:
         s.setdefault("dir", str(ROOT / "build" / "bench" / "songs" / slug(s["artist"] + " " + s["title"])))
-        s["group"] = ("metrónomo" if s["drift"] < 0.01 else "variable") + "/" + ("irregular" if s["meter"] >= 4 else "regular")
-    if a.set != "todos":
+        s["group"] = ("metronome" if s["drift"] < 0.01 else "variable") + "/" + ("irregular" if s["meter"] >= 4 else "regular")
+    if a.set != "all":
         songs = [s for s in songs if s["set"] == a.set]
     kwargs = json.loads(a.params)
     with ProcessPoolExecutor(a.workers) as ex:
-        results = list(ex.map(run_song, songs, [kwargs] * len(songs), [a.quitar] * len(songs)))
+        results = list(ex.map(run_song, songs, [kwargs] * len(songs), [a.drop] * len(songs)))
     ok = [r for r in results if "error" not in r]
     for r in sorted(ok, key=lambda r: -r["median"]):
-        print(f"{r['song'][:44]:44s} {r['group']:20s} mediana {r['median']:6.0f} ms | p90 {r['p90']:6.0f} | "
-              f">50ms {r['over50']*100:3.0f}% | >½beat {r['over_half_beat']*100:3.0f}% | sesgo {r['bias']:+5.0f} | huecos {r['gaps']} | {r['seconds']}s")
+        print(f"{r['song'][:44]:44s} {r['group']:20s} median {r['median']:6.0f} ms | p90 {r['p90']:6.0f} | "
+              f">50ms {r['over50']*100:3.0f}% | >½beat {r['over_half_beat']*100:3.0f}% | bias {r['bias']:+5.0f} | gaps {r['gaps']} | {r['seconds']}s")
     for r in results:
         if "error" in r:
             print("ERROR", r["song"], r["error"])
     if ok:
         med = np.median([r["median"] for r in ok]); hb = np.mean([r["over_half_beat"] for r in ok])
         good = sum(r["over_half_beat"] < 0.05 for r in ok)
-        print(f"\nRESUMEN {a.set} {a.tag} {kwargs} quitar={a.quitar}: mediana de medianas {med:.0f} ms | compases a más de ½ beat {hb*100:.1f}% "
-              f"| canciones bien alineadas (<5% compases mal) {good}/{len(ok)} | con huecos {sum(bool(r['gaps']) for r in ok)}")
+        print(f"\nSUMMARY {a.set} {a.tag} {kwargs} drop={a.drop}: median of medians {med:.0f} ms | bars off by more than ½ beat {hb*100:.1f}% "
+              f"| well-aligned songs (<5% bad bars) {good}/{len(ok)} | with gaps {sum(bool(r['gaps']) for r in ok)}")
         out = ROOT / "build" / "bench" / f"results_{a.set}_{a.tag or int(time.time())}.json"
         out.write_text(json.dumps(results, indent=1, ensure_ascii=False), encoding="utf-8")
 

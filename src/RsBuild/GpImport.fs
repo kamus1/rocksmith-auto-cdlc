@@ -9,7 +9,7 @@ let load (path: string) : Score =
     let bytes = File.ReadAllBytes path
     ScoreLoader.LoadScoreFromBytes(Core.EcmaScript.Uint8Array(bytes), Settings())
 
-/// Orden de reproducción de los compases (índices de MasterBar) expandiendo repeticiones y finales alternativos.
+/// Playback order of the bars (MasterBar indices), expanding repeats and alternate endings.
 let playbackOrder (s: Score) : int list =
     let bars = s.MasterBars
     let n = bars.Count
@@ -29,7 +29,7 @@ let playbackOrder (s: Score) : int list =
                 loop (i + 1) repeatStart pass acc
     loop 0 0 0 []
 
-/// Duración estimada (s) siguiendo el orden de reproducción y el tempo escrito.
+/// Estimated duration (s) following the playback order and the written tempo.
 let estimatedSeconds (s: Score) =
     let mutable tempo = 120.0
     playbackOrder s
@@ -43,12 +43,12 @@ let private noteName (midi: float) =
     let m = int midi
     $"{names[m % 12]}{m / 12 - 1}"
 
-/// Resumen legible de la partitura: metadatos, pistas, afinaciones, compases y tempos.
+/// Human-readable summary of the score: metadata, tracks, tunings, bars and tempos.
 let inspect (path: string) =
     let s = load path
-    printfn "Archivo:  %s" (Path.GetFileName path)
-    printfn "Título:   %s | Artista: %s | Álbum: %s" s.Title s.Artist s.Album
-    printfn "Compases: %d" s.MasterBars.Count
+    printfn "File:     %s" (Path.GetFileName path)
+    printfn "Title:    %s | Artist: %s | Album: %s" s.Title s.Artist s.Album
+    printfn "Bars:     %d" s.MasterBars.Count
 
     let tempos =
         s.MasterBars
@@ -63,23 +63,23 @@ let inspect (path: string) =
         |> Seq.map (fun (_, b) -> $"c{int b.Index + 1}={b.TimeSignatureNumerator}/{b.TimeSignatureDenominator}")
         |> Seq.toList
     let first = s.MasterBars[0]
-    printfn "Compás:   c1=%d/%d %s" (int first.TimeSignatureNumerator) (int first.TimeSignatureDenominator) (String.concat ", " sigs)
+    printfn "Time sig: c1=%d/%d %s" (int first.TimeSignatureNumerator) (int first.TimeSignatureDenominator) (String.concat ", " sigs)
 
     let repeats = s.MasterBars |> Seq.filter (fun mb -> mb.IsRepeatStart || mb.RepeatCount > 0.0) |> Seq.length
-    printfn "Repeticiones: %d marcas" repeats
+    printfn "Repeats:  %d marks" repeats
     let order = playbackOrder s
     let secs = estimatedSeconds s
-    printfn "Expandido: %d compases, %d:%02d (%.1f s) al tempo escrito" order.Length (int secs / 60) (int secs % 60) secs
+    printfn "Expanded: %d bars, %d:%02d (%.1f s) at the written tempo" order.Length (int secs / 60) (int secs % 60) secs
 
     for t in s.Tracks do
         for st in t.Staves do
             let notes =
                 st.Bars |> Seq.sumBy (fun b -> b.Voices |> Seq.sumBy (fun v -> v.Beats |> Seq.sumBy (fun bt -> bt.Notes.Count)))
             let tuning = st.StringTuning.Tunings |> Seq.map noteName |> String.concat " "
-            printfn "  Pista %d: %-28s cuerdas=%d afinación=[%s] capo=%d notas=%d" (int t.Index) t.Name st.StringTuning.Tunings.Count tuning (int st.Capo) notes
+            printfn "  Track %d: %-28s strings=%d tuning=[%s] capo=%d notes=%d" (int t.Index) t.Name st.StringTuning.Tunings.Count tuning (int st.Capo) notes
 
-/// Exporta a JSON la línea de tiempo nominal de la tab (tempo escrito):
-/// inicio de cada compás en orden de reproducción y las notas [ms; duración; midi (-1 = batería); pista].
+/// Exports the tab's nominal timeline (written tempo) to JSON:
+/// start of each bar in playback order and the notes [ms; duration; midi (-1 = drums); track].
 let exportTimeline (path: string) (outJson: string) =
     let s = load path
     let order = playbackOrder s
@@ -93,8 +93,8 @@ let exportTimeline (path: string) (outJson: string) =
         durs.Add d
         starts.Add(starts[starts.Count - 1] + d)
     let notes = ResizeArray<float[]>()
-    // Notas que suenan sin ataque nuevo (solo para la croma de la alineación): la continuación de una
-    // nota ligada y la parte estirada de un bend (BendPoint.Value en cuartos de tono, Offset 0-60)
+    // Notes that sound without a new attack (only for the alignment chroma): the continuation of a
+    // tied note and the bent part of a bend (BendPoint.Value in quarter tones, Offset 0-60)
     let held = ResizeArray<float[]>()
     for t in s.Tracks do
         for st in t.Staves do
@@ -112,7 +112,7 @@ let exportTimeline (path: string) (outJson: string) =
                                 if not n.IsTieDestination && not n.IsDead then
                                     let tMs = starts[k] + durs[k] * b.PlaybackStart / barTicks
                                     let dMs0 = durs[k] * b.PlaybackDuration / barTicks
-                                    // Con bend: el ataque dura hasta el primer punto estirado; el resto, en held
+                                    // With a bend: the attack lasts until the first bent point; the rest goes in held
                                     let dMs =
                                         if isDrums || not n.HasBend || n.BendPoints.Count = 0 then dMs0
                                         else
@@ -127,7 +127,7 @@ let exportTimeline (path: string) (outJson: string) =
                                             match pts |> Array.tryFind (fun p -> p.Value > 0) with
                                             | Some p -> dMs0 * float p.Offset / 60.0
                                             | None -> dMs0
-                                    // Batería: -(nota MIDI de percusión: 35/36 bombo, 38/40 caja…); -1 si no se conoce
+                                    // Drums: -(MIDI percussion note: 35/36 kick, 38/40 snare…); -1 if unknown
                                     let midi =
                                         if isDrums then
                                             let a = int n.PercussionArticulation
@@ -147,11 +147,10 @@ let exportTimeline (path: string) (outJson: string) =
                held = held
                masterbar_of_bar = order |})
     File.WriteAllText(outJson, json)
-    printfn "Timeline: %d compases, %d notas (+%d sin ataque: ligaduras y bends), %.1f s -> %s"
+    printfn "Timeline: %d bars, %d notes (+%d without attack: ties and bends), %.1f s -> %s"
         order.Length notes.Count held.Count (starts[starts.Count - 1] / 1000.0) outJson
 
-/// Información de la partitura y sus pistas en JSON, para que la CLI elija pistas y metadatos.
-/// Categoría de tono según el instrumento MIDI General de la pista (como PROGRAM_CATEGORY en pipeline.py).
+/// Tone category from the track's General MIDI instrument (like PROGRAM_CATEGORY in pipeline.py).
 let programCategory (program: int) =
     match program with
     | 24 | 25 -> Some "acoustic"
@@ -160,7 +159,8 @@ let programCategory (program: int) =
     | 30 -> Some "distortion"
     | _ -> None
 
-/// Categoría de tono según un texto de la tab ("Clean", "Dist.", "w/ overdrive"…), si lo indica.
+/// Tone category from a tab text ("Clean", "Dist.", "w/ overdrive"…), if it indicates one.
+/// "limpi" and "ac[uú]st" also cover Spanish-language tabs ("limpio", "acústica").
 let textCategory (text: string) =
     if System.String.IsNullOrWhiteSpace text then None
     else
@@ -173,10 +173,10 @@ let textCategory (text: string) =
         elif has @"overdrive|\bo\.?d\.|\bdrive|crunch" then Some "overdrive"
         else None
 
-/// Cambios de sonido de una pista en orden de reproducción: (índice en `order`, tick dentro del compás,
-/// categoría). El primero es el tono base, en (0, 0). Fuentes: el instrumento de la pista, los cambios de
-/// instrumento a mitad de pista y los textos de los beats y de las secciones. "auto" = instrumento sin
-/// categoría conocida (se elige el tono como siempre). Como mucho 4 categorías distintas (límite de Rocksmith).
+/// Sound changes of a track in playback order: (index in `order`, tick within the bar, category).
+/// The first is the base tone, at (0, 0). Sources: the track's instrument, mid-track instrument changes
+/// and the beat and section texts. "auto" = instrument with no known category (the tone is picked as
+/// usual). At most 4 distinct categories (Rocksmith's limit).
 let toneSegments (s: Score) (trackIndex: int) (order: int list) : (int * float * string) list =
     let t = s.Tracks[trackIndex]
     let st = t.Staves[0]
@@ -192,7 +192,7 @@ let toneSegments (s: Score) (trackIndex: int) (order: int list) : (int * float *
                               match programCategory (int a.Value) with Some c -> yield k, b.PlaybackStart, c | None -> ()
                       match textCategory b.Text with Some c -> yield k, b.PlaybackStart, c | None -> () ]
         |> List.sortBy (fun (k, tick, _) -> k, tick)
-    // Primera nota de la pista: lo que cambie antes de ella pasa a ser el tono base
+    // First note of the track: any change before it becomes the base tone
     let firstNote =
         order |> List.indexed |> List.tryPick (fun (k, mbIndex) ->
             st.Bars[mbIndex].Voices |> Seq.collect (fun v -> v.Beats) |> Seq.filter (fun b -> b.Notes.Count > 0)
@@ -212,6 +212,7 @@ let toneSegments (s: Score) (trackIndex: int) (order: int list) : (int * float *
     |> List.fold (fun acc (k, tick, c) -> match acc with (_, _, cur) :: _ when cur = c -> acc | _ -> (k, tick, c) :: acc) []
     |> List.rev
 
+/// Score and track info as JSON, so the CLI can pick tracks and metadata.
 let inspectJson (path: string) =
     let s = load path
     let order = playbackOrder s
@@ -236,7 +237,7 @@ let inspectJson (path: string) =
                  chords = beats |> List.filter (fun (_, n) -> n > 1) |> List.length
                  mean_fret = (if frets.IsEmpty then 0.0 else List.average frets)
                  max_fret = (if frets.IsEmpty then 0.0 else List.max frets)
-                 // Sonidos de la pista en orden de aparición (el primero es el base) y número de cambios
+                 // Track sounds in order of appearance (the first is the base) and number of changes
                  tone_categories = tones |> List.map (fun (_, _, c) -> c) |> List.distinct
                  tone_changes = max 0 (tones.Length - 1)
                  tone_segments = tones |> List.map (fun (k, _, c) -> {| bar = k + 1; category = c |})

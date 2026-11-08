@@ -1,11 +1,11 @@
-"""Conjunto de validación nuevo: la validación anterior ya se usó para medir, así que pasa a desarrollo.
+"""New validation set: the previous validation set has already been used for measuring, so it moves to dev.
 
-Elige 12 canciones nuevas (3 por grupo estabilidad × compás) excluyendo las del banco y sus artistas,
-con el mismo criterio que select_v1.py. Reescribe build/bench/benchmark.json (guarda el reparto anterior
-en "set_v1") y deja la lista para extract.fsx en build/bench/extract_new.txt.
-Uso: .venv/Scripts/python bench/select_new_val.py [--seed 11] [--prev desarrollo|<etiqueta>]
---prev: a qué conjunto pasa la validación anterior (por defecto, a desarrollo; con otra etiqueta, se aparta
-y el desarrollo no cambia). El reparto anterior queda en "set_vN".
+Picks 12 new songs (3 per stability × meter group), excluding the benchmark's songs and their artists,
+with the same criteria as select_v1.py. Rewrites build/bench/benchmark.json (saving the previous split
+in "set_v1") and writes the list for extract.fsx to build/bench/extract_new.txt.
+Usage: .venv/Scripts/python bench/select_new_val.py [--seed 11] [--prev dev|<label>]
+--prev: which set the previous validation set moves to (dev by default; with another label it is set
+aside and dev does not change). The previous split is kept in "set_vN".
 """
 import argparse, collections, json, random, re
 from pathlib import Path
@@ -16,7 +16,7 @@ ROOT = Path(__file__).resolve().parent.parent
 B = ROOT / "build" / "bench"
 p = argparse.ArgumentParser()
 p.add_argument("--seed", type=int, default=11)
-p.add_argument("--prev", default="desarrollo", help="conjunto al que pasa la validación anterior")
+p.add_argument("--prev", default="dev", help="set that the previous validation set moves to")
 a = p.parse_args()
 
 bench = json.loads((B / "benchmark.json").read_text(encoding="utf-8"))
@@ -45,12 +45,12 @@ for s in songs:
     mode = np.bincount(per).argmax() if len(per) else 4
     meter = int(np.sum(per != mode)) if len(per) else 0
     desc = " ".join(tone_by_song.get(norm(f"{s['artist']} - {s['title']}"), []))
-    tone = ("acústica" if "Acoustic" in desc else "distorsión" if re.search("Distortion|High Gain|Fuzz", desc)
-            else "limpio/overdrive" if desc else "?")
+    tone = ("acoustic" if "Acoustic" in desc else "distortion" if re.search("Distortion|High Gain|Fuzz", desc)
+            else "clean/overdrive" if desc else "?")
     rows.append(dict(artist=s["artist"], title=s["title"], path=s["path"], bpm=round(60000 / med),
                      drift=round(drift, 4), meter=meter, length=round(s["length"]), tone=tone))
 
-stab = lambda r: "metrónomo" if r["drift"] < 0.01 else "variable"
+stab = lambda r: "metronome" if r["drift"] < 0.01 else "variable"
 met = lambda r: "irregular" if r["meter"] >= 4 else "regular"
 random.seed(a.seed); random.shuffle(rows)
 groups = collections.defaultdict(list)
@@ -62,14 +62,14 @@ for key in sorted(groups):
     for r in sorted(groups[key], key=lambda r: (r["tone"] == "?",)):
         if r["artist"] in artists or r["path"] in {c["path"] for c in picked}:
             continue
-        sig = (r["tone"], "lento" if r["bpm"] < 100 else "medio" if r["bpm"] < 150 else "rápido")
+        sig = (r["tone"], "slow" if r["bpm"] < 100 else "medium" if r["bpm"] < 150 else "fast")
         if sig in seen:
             continue
         picked.append(r); seen.add(sig); artists.add(r["artist"])
         if len(picked) == 3:
             break
     for r in picked:
-        r["set"] = "validación"
+        r["set"] = "validation"
     chosen += picked
 
 for r in chosen:
@@ -77,7 +77,7 @@ for r in chosen:
           f"{met(r):9s} ({r['meter']:3d}) | {r['tone']}")
 for s in bench:
     s[f"set_v{round_}"] = s["set"]
-    if s["set"] == "validación":
+    if s["set"] == "validation":
         s["set"] = a.prev
 slug = lambda t: re.sub(r"[^a-z0-9]+", "-", t.lower()).strip("-")
 (B / "extract_new.txt").write_text(

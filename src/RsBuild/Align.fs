@@ -3,8 +3,8 @@ module RsBuild.Align
 open System.IO
 open System.Text.Json
 
-/// Lee los tiempos de compás (ms, orden de reproducción, compases + 1) calculados por cdlc/align.py,
-/// el fin real de cada compás (antes de un hueco de audio que no está en la tab) y los compases dudosos.
+/// Reads the bar times (ms, playback order, bars + 1) computed by cdlc/align.py,
+/// the actual end of each bar (before a gap of audio that is not in the tab) and the suspicious bars.
 let loadBarTimes (path: string) : float[] * float[] * int list =
     use doc = JsonDocument.Parse(File.ReadAllText path)
     let root = doc.RootElement

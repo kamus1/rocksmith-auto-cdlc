@@ -1,5 +1,5 @@
 "use strict";
-// Web local del generador de CDLC: sin dependencias, habla con cdlc/web/app.py.
+// Local web UI for the CDLC generator: no dependencies, talks to cdlc/web/app.py.
 
 const $ = (s) => document.querySelector(s);
 const el = (tag, attrs = {}, ...kids) => {
@@ -33,7 +33,7 @@ function toast(msg) {
   clearTimeout(toastTimer); toastTimer = setTimeout(() => (t.hidden = true), 4500);
 }
 
-// ------------------------------------------------------------------ navegación
+// ------------------------------------------------------------------ navigation
 document.querySelectorAll("[data-view]").forEach((b) => b.addEventListener("click", (e) => {
   e.preventDefault(); showView(b.dataset.view);
 }));
@@ -45,19 +45,19 @@ function showView(name) {
   window.scrollTo({ top: 0 });
 }
 
-// ------------------------------------------------------------------ estado del entorno
-const CHECK_NAMES = { wwise: "Wwise", ffmpeg: "ffmpeg", dotnet: ".NET", rsbuild: "RsBuild", dlc: "Carpeta del juego", tones: "Tonos" };
+// ------------------------------------------------------------------ environment status
+const CHECK_NAMES = { wwise: "Wwise", ffmpeg: "ffmpeg", dotnet: ".NET", rsbuild: "RsBuild", dlc: "Game folder", tones: "Tones" };
 async function loadStatus() {
   const s = await api("/api/status");
   const missing = s.checks.filter((c) => !c.ok && c.key !== "tones" && c.key !== "rsbuild");
   const pill = $("#status-pill");
   pill.querySelector(".dot").className = "dot " + (missing.length ? "err" : "ok");
   pill.querySelector(".label").textContent = missing.length
-    ? `Falta: ${missing.map((c) => CHECK_NAMES[c.key] || c.key).join(", ")}` : "Todo listo";
+    ? `Missing: ${missing.map((c) => CHECK_NAMES[c.key] || c.key).join(", ")}` : "All set";
   return s;
 }
 
-// ------------------------------------------------------------------ ajustes
+// ------------------------------------------------------------------ settings
 async function loadSettings() {
   const [s, t, cfg] = await Promise.all([loadStatus(), api("/api/tones"), api("/api/config")]);
   $("#cfg-dlc").value = cfg.dlc_dir;
@@ -67,8 +67,8 @@ async function loadSettings() {
     el("span", { class: "k" }, CHECK_NAMES[c.key] || c.key),
     el("span", { class: "v" + (c.ok ? "" : " bad") }, c.ok ? String(c.value) : c.help))));
   $("#tone-summary").textContent = t.total
-    ? `${t.total} tonos extraídos de tus CDLC. ` + Object.entries(t.categories).filter(([, v]) => v).map(([k, v]) => `${TONE_NAMES[k] || k} ${v}`).join(" · ")
-    : "Todavía no hay biblioteca de tonos: sin ella se usa un tono genérico.";
+    ? `${t.total} tones extracted from your CDLC. ` + Object.entries(t.categories).filter(([, v]) => v).map(([k, v]) => `${TONE_NAMES[k] || k} ${v}`).join(" · ")
+    : "No tone library yet: without it a generic tone is used.";
 }
 
 async function saveDlcDir(path) {
@@ -77,7 +77,7 @@ async function saveDlcDir(path) {
   try {
     const cfg = await api("/api/config", { method: "POST", body: fd });
     $("#cfg-dlc").value = cfg.dlc_dir;
-    msg.className = "small ok"; msg.textContent = "Guardado.";
+    msg.className = "small ok"; msg.textContent = "Saved.";
     loadSettings(); updateDeployHint();
   } catch (e) { msg.className = "small err"; msg.textContent = e.message; }
 }
@@ -92,25 +92,25 @@ $("#btn-tones").addEventListener("click", async () => {
     follow(job_id, (ev) => {
       if (ev.type === "log" || ev.type === "step") log.textContent += (ev.line || ev.title) + "\n";
       if (ev.type === "error") log.textContent += `ERROR: ${ev.message}\n${ev.detail || ""}`;
-      if (ev.type === "done") { log.textContent += `Listo: ${ev.result.total} tonos.\n`; loadSettings(); }
+      if (ev.type === "done") { log.textContent += `Done: ${ev.result.total} tones.\n`; loadSettings(); }
     });
   } catch (e) { log.textContent = e.message; }
 });
 
-// ------------------------------------------------------------------ nueva canción
+// ------------------------------------------------------------------ new song
 const state = { upload: null, info: null, audio: null, running: false };
-const GM = { 24: "Guitarra de nailon", 25: "Guitarra acústica", 26: "Guitarra jazz", 27: "Guitarra limpia",
-  28: "Guitarra apagada", 29: "Guitarra overdrive", 30: "Guitarra distorsión", 31: "Armónicos",
-  32: "Bajo acústico", 33: "Bajo (dedos)", 34: "Bajo (púa)", 35: "Bajo fretless", 36: "Bajo slap", 37: "Bajo slap 2",
-  38: "Bajo synth", 39: "Bajo synth 2" };
+const GM = { 24: "Nylon guitar", 25: "Acoustic guitar", 26: "Jazz guitar", 27: "Clean guitar",
+  28: "Muted guitar", 29: "Overdrive guitar", 30: "Distortion guitar", 31: "Harmonics",
+  32: "Acoustic bass", 33: "Bass (finger)", 34: "Bass (pick)", 35: "Fretless bass", 36: "Slap bass", 37: "Slap bass 2",
+  38: "Synth bass", 39: "Synth bass 2" };
 const NOTE = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"];
-const TONE_NAMES = { clean: "limpio", overdrive: "overdrive", crunch: "crunch", distortion: "distorsión",
-  highgain: "high gain", acoustic: "acústico", fuzz: "fuzz", auto: "automático" };
-// Sonidos de la pista y dónde cambia ("distorsión → limpio (c198) → …"), según la tab
+const TONE_NAMES = { clean: "clean", overdrive: "overdrive", crunch: "crunch", distortion: "distortion",
+  highgain: "high gain", acoustic: "acoustic", fuzz: "fuzz", auto: "automatic" };
+// The track's sounds and where they change ("distortion → clean (b198) → …"), according to the tab
 function toneText(t) {
   const segs = t.tone_segments || [];
   if (t.is_percussion || !segs.length) return "—";
-  return segs.map((s, i) => (TONE_NAMES[s.category] || s.category) + (i ? ` (c${s.bar})` : "")).join(" → ");
+  return segs.map((s, i) => (TONE_NAMES[s.category] || s.category) + (i ? ` (b${s.bar})` : "")).join(" → ");
 }
 
 function setupDrop(dropId, inputId, onFile) {
@@ -126,7 +126,7 @@ function setupDrop(dropId, inputId, onFile) {
 
 setupDrop("#drop-tab", "#file-tab", async (file) => {
   const drop = $("#drop-tab");
-  $("#chosen-tab").textContent = `${file.name} — leyendo…`;
+  $("#chosen-tab").textContent = `${file.name} — reading…`;
   drop.classList.remove("done", "error");
   const fd = new FormData(); fd.append("tab", file);
   try {
@@ -152,17 +152,17 @@ setupDrop("#drop-audio", "#file-audio", (file) => {
 
 function renderSetup(r) {
   const { info, auto } = r;
-  $("#auto-desc").textContent = `Automático: ${auto.description}`;
+  $("#auto-desc").textContent = `Automatic: ${auto.description}`;
   const rows = info.tracks.map((t) => {
     const usable = !t.is_percussion && t.bars_with_notes > 0;
     const tuning = (t.tuning || []).map((m) => NOTE[m % 12]).join(" ");
     return el("tr", { class: usable ? "" : "dim" },
-      el("td", {}, t.name || `Pista ${t.index + 1}`), el("td", { class: "c" }, t.strings),
+      el("td", {}, t.name || `Track ${t.index + 1}`), el("td", { class: "c" }, t.strings),
       el("td", { class: "mono" }, t.is_percussion ? "—" : tuning),
       el("td", { class: "r" }, t.single_notes), el("td", { class: "r" }, t.chords),
       el("td", { class: "r" }, `${Math.round(100 * t.bars_with_notes / Math.max(1, info.bars))} %`),
-      el("td", {}, t.is_percussion ? "Batería" : (GM[t.program] || `MIDI ${t.program}`)),
-      el("td", { class: "tones", title: "Cambios de sonido que marca la tab: cada uno será un cambio de tono en el juego" }, toneText(t)),
+      el("td", {}, t.is_percussion ? "Drums" : (GM[t.program] || `MIDI ${t.program}`)),
+      el("td", { class: "tones", title: "Sound changes marked in the tab: each one becomes a tone change in the game" }, toneText(t)),
       el("td", { class: "c" }, usable ? el("input", { type: "radio", name: "lead", value: t.index, checked: t.index === auto.lead, "aria-label": `Lead: ${t.name}` }) : ""),
       el("td", { class: "c" }, usable ? el("input", { type: "radio", name: "rhythm", value: t.index, checked: t.index === auto.rhythm, "aria-label": `Rhythm: ${t.name}` }) : ""));
   });
@@ -181,23 +181,23 @@ async function loadTones() {
     const t = await api("/api/tones");
     const sel = $("#m-tone");
     for (const [k, n] of Object.entries(t.categories)) {
-      if (n) sel.append(el("option", { value: k }, `Solo ${TONE_NAMES[k] || k} (${n} tonos)`));
+      if (n) sel.append(el("option", { value: k }, `Only ${TONE_NAMES[k] || k} (${n} tones)`));
     }
-  } catch { /* sin biblioteca: solo "automático" */ }
+  } catch { /* no library: only "automatic" */ }
 }
 
 async function updateDeployHint() {
   try {
     const cfg = await api("/api/config");
-    $("#deploy-dir").textContent = cfg.dlc_dir_ok ? cfg.dlc_dir : `No existe ${cfg.dlc_dir}: elígela en Ajustes.`;
-  } catch { /* nada */ }
+    $("#deploy-dir").textContent = cfg.dlc_dir_ok ? cfg.dlc_dir : `${cfg.dlc_dir} does not exist: choose it in Settings.`;
+  } catch { /* ignore */ }
 }
 
 function updateBuildButton() {
   const ready = !!(state.upload && state.audio);
   $("#btn-build").disabled = !ready || state.running;
-  $("#build-hint").textContent = state.running ? "Generando…" : ready ? "Listo para generar." :
-    !state.upload ? "Falta la tab." : "Falta el audio.";
+  $("#build-hint").textContent = state.running ? "Generating…" : ready ? "Ready to generate." :
+    !state.upload ? "Tab missing." : "Audio missing.";
 }
 
 $("#btn-build").addEventListener("click", async () => {
@@ -222,9 +222,9 @@ $("#btn-build").addEventListener("click", async () => {
   }
 });
 
-// ------------------------------------------------------------------ progreso
-const STEP_NAMES = ["Pistas y datos de la canción", "Audio → WAV", "Línea de tiempo de la tab",
-  "Alineación tab ↔ audio", "XML, tonos, audio Wwise y empaquetado", "Copia al juego"];
+// ------------------------------------------------------------------ progress
+const STEP_NAMES = ["Tracks and song data", "Audio → WAV", "Tab timeline",
+  "Tab ↔ audio alignment", "XML, tones, Wwise audio and packaging", "Copy to the game"];
 let elapsedTimer;
 
 function resetProgress() {
@@ -274,15 +274,15 @@ function followBuild(jobId) {
       finishCurrent(ev.t);
       const r = ev.result;
       showResult(true,
-        el("strong", {}, `${r.meta.artist} — ${r.meta.title}${r.version ? ` (v${r.version})` : ""} listo`),
-        el("span", {}, r.deployed ? "Copiado al juego. Vuelve a la pantalla de título de Rocksmith para que lo cargue."
-          : `Sin copiar al juego: ${r.psarc}`),
-        el("span", { class: "muted small" }, `${r.tracks} · Tono: ${r.tone}`),
+        el("strong", {}, `${r.meta.artist} — ${r.meta.title}${r.version ? ` (v${r.version})` : ""} ready`),
+        el("span", {}, r.deployed ? "Copied to the game. Go back to the Rocksmith title screen to load it."
+          : `Not copied to the game: ${r.psarc}`),
+        el("span", { class: "muted small" }, `${r.tracks} · Tone: ${r.tone}`),
         warningList(r.warnings));
       end();
     } else if (ev.type === "error") {
       finishCurrent(ev.t, "error");
-      showResult(false, el("strong", {}, ev.message), el("span", { class: "muted small" }, "El detalle está en el log."));
+      showResult(false, el("strong", {}, ev.message), el("span", { class: "muted small" }, "Details are in the log."));
       if (ev.detail) $("#log").textContent += `\n${ev.detail}`;
       $("#log-box").open = true;
       end();
@@ -301,24 +301,24 @@ function follow(jobId, onEvent) {
   return es;
 }
 
-// ------------------------------------------------------------------ mis canciones
+// ------------------------------------------------------------------ my songs
 async function loadSongs() {
   const list = $("#song-list");
   const songs = await api("/api/songs");
   if (!songs.length) {
     list.replaceChildren(el("div", { class: "empty", style: "grid-column: 1 / -1" },
-      el("p", {}, "Todavía no hay canciones generadas."),
-      el("button", { class: "btn", onclick: () => showView("new") }, "Crear la primera")));
+      el("p", {}, "No songs generated yet."),
+      el("button", { class: "btn", onclick: () => showView("new") }, "Create the first one")));
     return;
   }
   list.replaceChildren(...songs.map((s) => {
     const deployed = el("span", { class: "badge" }, el("span", { class: "dot " + (s.deployed ? "ok" : "") }),
-      s.deployed ? "En el juego" : "No está en el juego");
+      s.deployed ? "In the game" : "Not in the game");
     const badges = [
       s.version ? el("span", { class: "badge mono" }, `v${s.version}`) : null,
       deployed,
       s.warnings.length ? el("span", { class: "badge warn", title: s.warnings.join("\n") },
-        `${s.warnings.length} aviso${s.warnings.length > 1 ? "s" : ""}`) : null,
+        `${s.warnings.length} warning${s.warnings.length > 1 ? "s" : ""}`) : null,
     ];
     return el("article", { class: "song" },
       el("div", { class: "art", html: s.cover ? "" : ICON.music },
@@ -326,17 +326,17 @@ async function loadSongs() {
       el("div", { class: "song-body" },
         el("span", { class: "song-title" }, s.title), el("span", { class: "song-artist" }, s.artist),
         el("div", { class: "badges" }, badges),
-        el("span", { class: "faint small" }, `Generado ${new Date(s.built * 1000).toLocaleString()}`),
+        el("span", { class: "faint small" }, `Generated ${new Date(s.built * 1000).toLocaleString("en-US")}`),
         el("div", { class: "song-actions" },
-          el("button", { class: "btn sm", disabled: !s.report, onclick: () => showReport(s) }, "Informe"),
+          el("button", { class: "btn sm", disabled: !s.report, onclick: () => showReport(s) }, "Report"),
           el("button", { class: "btn sm", onclick: async (e) => {
             e.target.disabled = true;
             try {
               const r = await api(`/api/songs/${s.name}/deploy`, { method: "POST" });
-              toast(`Copiado como ${r.deployed}. Vuelve a la pantalla de título del juego.`);
+              toast(`Copied as ${r.deployed}. Go back to the game's title screen.`);
               loadSongs();
             } catch (err) { toast(err.message); e.target.disabled = false; }
-          } }, s.deployed ? "Volver a copiar" : "Copiar al juego"))));
+          } }, s.deployed ? "Copy again" : "Copy to the game"))));
   }));
 }
 
@@ -346,7 +346,7 @@ async function showReport(s) {
   $("#report").showModal();
 }
 
-// ------------------------------------------------------------------ inicio
+// ------------------------------------------------------------------ startup
 loadStatus();
 loadTones();
 updateDeployHint();

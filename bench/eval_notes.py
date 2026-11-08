@@ -1,4 +1,4 @@
-"""Compara notas alineadas por nosotros con las del chart de referencia (misma altura, tiempo más cercano)."""
+"""Compares our aligned notes with those of the reference chart (same pitch, nearest time)."""
 import json, sys, numpy as np, xml.etree.ElementTree as ET
 from pathlib import Path
 
@@ -37,11 +37,11 @@ def evaluate(ref, ours, label):
         errs += list(e); times += list(rt)
     errs, times = np.array(errs), np.array(times)
     per_min = [int(np.median(errs[(times >= a * 1000) & (times < (a + 60) * 1000)])) if ((times >= a * 1000) & (times < (a + 60) * 1000)).any() else None for a in range(0, 540, 60)]
-    print(f"{label:34s} notas {len(errs)}: mediana {np.median(errs):5.0f} ms | <50 {np.mean(errs<50)*100:3.0f}% | >150 {np.mean(errs>150)*100:3.0f}% | por minuto {per_min}")
+    print(f"{label:34s} notes {len(errs)}: median {np.median(errs):5.0f} ms | <50 {np.mean(errs<50)*100:3.0f}% | >150 {np.mean(errs>150)*100:3.0f}% | per minute {per_min}")
     return errs, times
 
 def window_offsets(ref, ours, win_s=10, max_shift=3000, tol=40):
-    """Por ventana: desplazamiento (ms) que más notas de igual altura hace coincidir (±tol) y % de coincidencias."""
+    """Per window: the shift (ms) that matches the most same-pitch notes (±tol), and the % of matches."""
     shifts = np.arange(-max_shift, max_shift + 1, 10)
     res = []
     t_end = ref[:, 0].max()
@@ -59,7 +59,7 @@ def window_offsets(ref, ours, win_s=10, max_shift=3000, tol=40):
                 e = np.minimum(np.abs(ot[j] - rt), np.abs(ot[j - 1] - rt)) if len(ot) > 1 else np.abs(ot[0] - rt)
                 m += int((e <= tol).sum())
             if m > best[0]: best = (m, s)
-        res.append((a / 1000, -best[1], best[0] / len(r)))   # error = -desplazamiento necesario
+        res.append((a / 1000, -best[1], best[0] / len(r)))   # error = -required shift
     return res
 
 def summary(ref, ours, label):
@@ -67,5 +67,5 @@ def summary(ref, ours, label):
     good = [(t, e, m) for t, e, m in res if m >= 0.3]
     errs = np.array([abs(e) for _, e, _ in good])
     line = " ".join(f"{int(t)//60}:{int(t)%60:02d}={e:+d}" + ("" if m >= 0.3 else "?") for t, e, m in res)
-    print(f"{label:30s} ventanas fiables {len(good)}/{len(res)} | |error| mediana {np.median(errs):4.0f} ms | >100 ms en {np.mean(errs>100)*100:3.0f}% | >300 ms en {np.mean(errs>300)*100:3.0f}%")
+    print(f"{label:30s} reliable windows {len(good)}/{len(res)} | |error| median {np.median(errs):4.0f} ms | >100 ms in {np.mean(errs>100)*100:3.0f}% | >300 ms in {np.mean(errs>300)*100:3.0f}%")
     print("     " + line)

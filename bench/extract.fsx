@@ -7,7 +7,7 @@
 open System.IO
 open Rocksmith2014.PSARC
 open Rocksmith2014.Common
-// Uso: extract.fsx <lista "psarc|carpeta"> — charts instrumentales a XML y el audio principal (.wem más grande)
+// Usage: extract.fsx <list of "psarc|folder"> — instrumental charts to XML and the main audio (largest .wem)
 for line in File.ReadAllLines fsi.CommandLineArgs[1] do
     let parts = line.Split('|')
     let path, dir = parts[0], parts[1]

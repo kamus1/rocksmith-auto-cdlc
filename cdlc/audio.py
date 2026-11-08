@@ -1,4 +1,4 @@
-"""Preparación del audio para el pipeline de CDLC."""
+"""Audio preparation for the CDLC pipeline."""
 
 import shutil
 import subprocess
@@ -8,12 +8,12 @@ from pathlib import Path
 def ffmpeg_exe() -> str:
     exe = shutil.which("ffmpeg")
     if exe is None:
-        raise RuntimeError("No se encontró ffmpeg en el PATH")
+        raise RuntimeError("ffmpeg not found in PATH")
     return exe
 
 
 def to_wav(src: Path, dst: Path, pad_seconds: float = 0.0) -> Path:
-    """Convierte a WAV 48 kHz estéreo 16 bits, añadiendo pad_seconds de silencio al inicio."""
+    """Convert to 48 kHz stereo 16-bit WAV, prepending pad_seconds of silence."""
     dst.parent.mkdir(parents=True, exist_ok=True)
     delay_ms = int(round(pad_seconds * 1000))
     afilter = f"adelay={delay_ms}:all=1" if delay_ms > 0 else "anull"

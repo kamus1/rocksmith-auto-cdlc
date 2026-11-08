@@ -1,4 +1,4 @@
-/* Estilo sobrio tipo Vercel: negro/blanco, bordes de 1 px, tipografía de sistema. Claro u oscuro según el sistema. */
+/* Understated Vercel-like style: black/white, 1 px borders, system font. Light or dark following the OS. */
 :root {
   --bg: #000; --surface: #0a0a0a; --surface-2: #111; --hover: #1a1a1a;
   --border: #262626; --border-strong: #3a3a3a;
@@ -32,7 +32,7 @@ code { padding: 1px 5px; border: 1px solid var(--border); border-radius: 4px; ba
 .muted { color: var(--muted); } .faint { color: var(--faint); } .small { font-size: 13px; } .block { display: block; }
 svg { stroke: currentColor; fill: none; stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; }
 
-/* Cabecera */
+/* Header */
 .top { position: sticky; top: 0; z-index: 10; background: color-mix(in srgb, var(--bg) 85%, transparent);
   backdrop-filter: saturate(180%) blur(8px); border-bottom: 1px solid var(--border); }
 .top-row { max-width: 1120px; margin: 0 auto; padding: 14px 24px 6px; display: flex; align-items: center; gap: 16px; }
@@ -52,12 +52,12 @@ svg { stroke: currentColor; fill: none; stroke-width: 1.6; stroke-linecap: round
 .tab.active { color: var(--text); }
 .tab.active::after { content: ""; position: absolute; left: 10px; right: 10px; bottom: -1px; height: 2px; background: var(--text); border-radius: 2px; }
 
-/* Página */
+/* Page */
 main { max-width: 1120px; margin: 0 auto; padding: 32px 24px 80px; }
 .view { display: none; } .view.active { display: block; }
 .page-head { margin-bottom: 24px; }
 
-/* Tarjetas */
+/* Cards */
 .card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 20px; margin-bottom: 16px; }
 .card-head { display: flex; align-items: center; gap: 10px; margin-bottom: 16px; }
 .card-head .small { margin-left: auto; text-align: right; }
@@ -66,7 +66,7 @@ main { max-width: 1120px; margin: 0 auto; padding: 32px 24px 80px; }
 .card-foot { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin: 20px -20px -20px; padding: 14px 20px;
   border-top: 1px solid var(--border); background: var(--surface-2); border-radius: 0 0 var(--radius) var(--radius); }
 
-/* Zonas de subida */
+/* Drop zones */
 .drops { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
 .drop { display: flex; flex-direction: column; align-items: flex-start; gap: 2px; padding: 20px; min-height: 132px;
   border: 1px dashed var(--border-strong); border-radius: var(--radius); cursor: pointer; transition: border-color .15s, background .15s; }
@@ -80,7 +80,7 @@ main { max-width: 1120px; margin: 0 auto; padding: 32px 24px 80px; }
 .drop.done .drop-file::before { content: "✓ "; color: var(--ok); }
 .drop.error .drop-file { color: var(--err); }
 
-/* Tabla */
+/* Table */
 .table-wrap { overflow-x: auto; margin: 0 -20px; }
 table { width: 100%; border-collapse: collapse; font-size: 13.5px; }
 th, td { text-align: left; padding: 9px 12px; border-bottom: 1px solid var(--border); white-space: nowrap; }
@@ -92,7 +92,7 @@ td.c, th.c { text-align: center; } td.r, th.r { text-align: right; font-variant-
 td.tones { white-space: normal; min-width: 160px; color: var(--muted); font-size: 12.5px; }
 input[type=radio] { accent-color: var(--text); width: 15px; height: 15px; cursor: pointer; }
 
-/* Formularios */
+/* Forms */
 .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
 .field { display: flex; flex-direction: column; gap: 6px; font-size: 13px; color: var(--muted); font-weight: 500; }
 .field.span2 { grid-column: span 2; }
@@ -109,7 +109,7 @@ input[type=file]::file-selector-button { font: inherit; font-size: 13px; height:
 .check { display: inline-flex; align-items: center; gap: 8px; margin-top: 14px; color: var(--muted); font-size: 13px; cursor: pointer; }
 .inline-form { display: flex; gap: 8px; flex-wrap: wrap; } .grow { flex: 1; min-width: 240px; }
 
-/* Interruptores */
+/* Switches */
 .switch { display: flex; align-items: flex-start; gap: 12px; padding: 10px 0; cursor: pointer; }
 .switch + .switch { border-top: 1px solid var(--border); }
 .switch input { position: absolute; opacity: 0; pointer-events: none; }
@@ -119,7 +119,7 @@ input[type=file]::file-selector-button { font: inherit; font-size: 13px; height:
 .switch input:checked + .track::after { transform: translateX(14px); }
 .switch input:focus-visible + .track { box-shadow: 0 0 0 3px color-mix(in srgb, var(--text) 25%, transparent); }
 
-/* Botones */
+/* Buttons */
 .btn { display: inline-flex; align-items: center; justify-content: center; gap: 6px; height: 36px; padding: 0 14px;
   border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--surface); color: var(--text);
   font: inherit; font-size: 14px; font-weight: 500; cursor: pointer; transition: background .15s, border-color .15s, opacity .15s; }
@@ -130,7 +130,7 @@ input[type=file]::file-selector-button { font: inherit; font-size: 13px; height:
 .btn.sm { height: 30px; padding: 0 10px; font-size: 13px; }
 .btn.icon { width: 32px; height: 32px; padding: 0; }
 
-/* Progreso */
+/* Progress */
 .steps { list-style: none; margin: 0; padding: 0; position: relative; }
 .steps li { display: flex; align-items: flex-start; gap: 12px; padding: 8px 0; position: relative; }
 .steps li:not(:last-child)::before { content: ""; position: absolute; left: 9px; top: 30px; bottom: -6px; width: 1px; background: var(--border); }
@@ -163,7 +163,7 @@ pre, .terminal { background: #000; color: #d4d4d4; border: 1px solid var(--borde
   font: 12px/1.6 var(--mono); white-space: pre-wrap; word-break: break-word; max-height: 360px; overflow: auto; margin: 10px 0 0; }
 @media (prefers-color-scheme: light) { pre, .terminal { background: #0a0a0a; color: #e5e5e5; border-color: #0a0a0a; } }
 
-/* Mis canciones */
+/* My songs */
 .cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 16px; }
 .song { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden; display: flex; flex-direction: column; transition: border-color .15s; }
 .song:hover { border-color: var(--border-strong); }
@@ -182,7 +182,7 @@ pre, .terminal { background: #000; color: #d4d4d4; border: 1px solid var(--borde
 .song-actions .btn { flex: 1; }
 .empty { border: 1px dashed var(--border-strong); border-radius: var(--radius); padding: 48px 24px; text-align: center; color: var(--muted); }
 
-/* Ajustes */
+/* Settings */
 .checks { list-style: none; margin: 0; padding: 0; }
 .checks li { display: flex; gap: 12px; align-items: flex-start; padding: 10px 0; border-bottom: 1px solid var(--border); }
 .checks li:last-child { border-bottom: 0; }
@@ -191,7 +191,7 @@ pre, .terminal { background: #000; color: #d4d4d4; border: 1px solid var(--borde
 .checks .v.bad { color: var(--err); font-family: var(--font); font-size: 13px; }
 #cfg-msg.ok { color: var(--ok); } #cfg-msg.err { color: var(--err); }
 
-/* Informe */
+/* Report */
 .sheet { border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface); color: var(--text); padding: 0; width: min(860px, 94vw); }
 .sheet::backdrop { background: rgba(0, 0, 0, .6); backdrop-filter: blur(2px); }
 .sheet-head { display: flex; align-items: center; justify-content: space-between; padding: 14px 16px; border-bottom: 1px solid var(--border); }

@@ -1,7 +1,7 @@
-"""Lógica del generador de CDLC (audio + tab de Guitar Pro → .psarc), sin interfaz.
+"""CDLC generator logic (audio + Guitar Pro tab → .psarc), with no UI.
 
-La usan la CLI (cli.py) y la web local. build_song informa del progreso con on_step(n, título) y
-on_log(línea) en lugar de imprimir, y señala los errores con PipelineError en vez de terminar el proceso.
+Used by the CLI (cli.py) and the local web app. build_song reports progress through on_step(n, title) and
+on_log(line) instead of printing, and signals errors with PipelineError instead of exiting the process.
 """
 
 import glob
@@ -20,7 +20,7 @@ ROOT = Path(__file__).resolve().parent.parent
 RSBUILD = ROOT / "src" / "RsBuild" / "bin" / "Release" / "net10.0" / "RsBuild.dll"
 DOTNET = shutil.which("dotnet") or r"C:\Program Files\dotnet\dotnet.exe"
 DEFAULT_DLC_DIR = Path(r"C:\Program Files (x86)\Steam\steamapps\common\Rocksmith2014\dlc")
-CONFIG_PATH = ROOT / "config.json"                  # ajustes del usuario (fuera de git)
+CONFIG_PATH = ROOT / "config.json"                  # user settings (not in git)
 
 
 def load_config() -> dict:
@@ -37,16 +37,16 @@ def save_config(**changes) -> dict:
 
 
 def dlc_dir() -> Path:
-    """Carpeta dlc/ de Rocksmith: la de config.json o, si no hay, la de Steam por defecto."""
+    """Rocksmith's dlc/ folder: the one in config.json or, if none, the default Steam one."""
     return Path(load_config().get("dlc_dir") or DEFAULT_DLC_DIR)
 WINGET_LINKS = Path(os.environ.get("LOCALAPPDATA", "")) / "Microsoft" / "WinGet" / "Links"
 SUPPORTED_WWISE = re.compile(r"20(19|21|22|23)")
 TONES_DIR = ROOT / "build" / "tones"
-STEPS = 5                                            # pasos numerados 0..STEPS
+STEPS = 5                                            # steps numbered 0..STEPS
 
 
 class PipelineError(Exception):
-    """Error con un mensaje para el usuario; detail lleva la salida completa de la herramienta, si la hay."""
+    """Error with a message for the user; detail holds the tool's full output, if any."""
 
     def __init__(self, message: str, detail: str = ""):
         super().__init__(message)
@@ -54,7 +54,7 @@ class PipelineError(Exception):
 
 
 def find_wwise() -> str | None:
-    """Carpeta de una instalación de Wwise compatible (2019–2023)."""
+    """Folder of a compatible Wwise install (2019–2023)."""
     env = os.environ.get("WWISEROOT")
     if env and SUPPORTED_WWISE.search(env) and Path(env).is_dir():
         return env
@@ -74,7 +74,7 @@ def rsbuild(*args: str, env: dict | None = None) -> str:
     p = subprocess.run([DOTNET, str(RSBUILD), *args], capture_output=True, text=True, encoding="utf-8",
                        errors="replace", env=env)
     if p.returncode != 0:
-        raise PipelineError(f"RsBuild {args[0]} falló (código {p.returncode})", p.stdout + p.stderr)
+        raise PipelineError(f"RsBuild {args[0]} failed (exit code {p.returncode})", p.stdout + p.stderr)
     return p.stdout
 
 
@@ -88,6 +88,7 @@ TONE_CATEGORIES = {
     "fuzz": ["Fuzz"],
 }
 
+# Tone-name hints; "limpi" and "acu" also cover Spanish-named tones
 CATEGORY_NAME_HINT = {
     "clean": re.compile(r"clean|limpi", re.I),
     "overdrive": re.compile(r"overdrive|drive|od|crunch", re.I),
@@ -98,60 +99,61 @@ CATEGORY_NAME_HINT = {
     "fuzz": re.compile(r"fuzz", re.I),
 }
 
-# Instrumento MIDI General de la pista (Guitar Pro) → categoría de tono
+# Track's General MIDI instrument (Guitar Pro) → tone category
 PROGRAM_CATEGORY = {24: "acoustic", 25: "acoustic", 26: "clean", 27: "clean", 28: "clean",
                     29: "overdrive", 30: "distortion", 31: "clean"}
 
 
 def resolve_tone(tone: str | None, artist: str | None, title: str | None,
                  program: int | None = None) -> tuple[Path | None, str]:
-    """Elige el tono: archivo, categoría o automático (misma canción → mismo artista → instrumento de la pista)."""
+    """Picks the tone: file, category or automatic (same song → same artist → track instrument)."""
     if tone and Path(tone).is_file():
-        return Path(tone).resolve(), f"archivo {tone}"
+        return Path(tone).resolve(), f"file {tone}"
     index_path = TONES_DIR / "index.json"
     if not index_path.exists():
         if tone:
-            raise PipelineError("No hay biblioteca de tonos: ejecuta primero `python -m cdlc tones`.")
-        return None, "tono por defecto (sin biblioteca)"
+            raise PipelineError("No tone library: run `python -m cdlc tones` first.")
+        return None, "default tone (no library)"
     entries = json.loads(index_path.read_text(encoding="utf-8"))
 
     def pick(cands: list[dict]) -> dict | None:
         if not cands:
             return None
-        # Preferir distorsión/overdrive en el arrangement Lead, después el resto en orden estable
+        # Prefer distortion/overdrive in the Lead arrangement, then the rest in a stable order
         rank = {"Distortion": 0, "High Gain": 0, "Overdrive": 1, "Lead": 2, "Clean": 3}
         return sorted(cands, key=lambda e: (rank.get(e["Descriptors"], 4), e["Arrangement"] != "Lead", e["File"]))[0]
 
     if tone:
         wanted = TONE_CATEGORIES.get(tone.lower())
         if wanted is None:
-            raise PipelineError(f"El tono debe ser un archivo o una categoría: {', '.join(TONE_CATEGORIES)}")
+            raise PipelineError(f"The tone must be a file or a category: {', '.join(TONE_CATEGORIES)}")
         name_hint = CATEGORY_NAME_HINT[tone.lower()]
+        # "acu" and "limpi" also cover Spanish-named tones
         contradicts = re.compile(r"clean|acoust|acu|limpi" if tone.lower() not in ("clean", "acoustic")
                                  else r"dist|drive|od|fuzz|gain|lead", re.I)
         cands = [e for e in entries if e["Descriptors"] in wanted and not contradicts.search(e["Name"])]
         chosen = sorted(cands, key=lambda e: (not name_hint.search(e["Name"]), e["Descriptors"] != wanted[0],
                                               e["Arrangement"] != "Lead", e["File"]))[0] if cands else None
         if chosen is None:
-            raise PipelineError(f"No hay tonos de la categoría {tone} en la biblioteca")
-        return TONES_DIR / chosen["File"], f"categoría {tone}: {chosen['Song']} / {chosen['Name']}"
+            raise PipelineError(f"No tones of category {tone} in the library")
+        return TONES_DIR / chosen["File"], f"category {tone}: {chosen['Song']} / {chosen['Name']}"
 
     norm = lambda s: re.sub(r"[^a-z0-9]", "", (s or "").lower())
     if artist and title:
         same_song = [e for e in entries if norm(e["Song"]) == norm(f"{artist} - {title}")]
         if (c := pick(same_song)):
-            return TONES_DIR / c["File"], f"misma canción: {c['Song']} / {c['Name']} ({c['Descriptors']})"
+            return TONES_DIR / c["File"], f"same song: {c['Song']} / {c['Name']} ({c['Descriptors']})"
     if artist:
         same_artist = [e for e in entries if norm(e["Song"].split(" - ")[0]) == norm(artist)]
         if (c := pick(same_artist)):
-            return TONES_DIR / c["File"], f"mismo artista: {c['Song']} / {c['Name']} ({c['Descriptors']})"
+            return TONES_DIR / c["File"], f"same artist: {c['Song']} / {c['Name']} ({c['Descriptors']})"
     if program in PROGRAM_CATEGORY:
         path, desc = resolve_tone(PROGRAM_CATEGORY[program], None, None)
-        return path, f"según el instrumento de la pista (MIDI {program}), {desc}"
-    return None, "tono por defecto"
+        return path, f"from the track instrument (MIDI {program}), {desc}"
+    return None, "default tone"
 
 
-# Si la canción de origen no tiene un sonido, el más parecido que sí tenga (para no mezclar orígenes)
+# If the source song lacks a sound, the closest one it does have (so sources are not mixed)
 CATEGORY_FALLBACK = {
     "clean": ["acoustic", "overdrive"], "acoustic": ["clean"], "overdrive": ["crunch", "distortion", "clean"],
     "crunch": ["overdrive", "distortion"], "distortion": ["highgain", "crunch", "overdrive"],
@@ -161,12 +163,12 @@ CATEGORY_FALLBACK = {
 
 def tone_set(categories: list[str], artist: str | None, title: str | None,
              program: int | None = None) -> dict[str, tuple[Path, str]]:
-    """Un tono por sonido de la pista, todos de la misma canción de la biblioteca: los tonos de una canción
-    están equilibrados entre sí (volumen, ganancia) y los de canciones distintas no (un overdrive de otra
-    canción puede sonar mucho más bajo que la distorsión). Orden: la misma canción; una del mismo artista
-    (completando los sonidos que no tenga con el más parecido, si quedan al menos dos tonos distintos); una
-    que tenga todos los sonidos.
-    Devuelve {categoría: (archivo, descripción)}; vacío si no hay biblioteca o ninguna canción sirve."""
+    """One tone per sound of the track, all from the same library song: a song's tones are balanced
+    against each other (volume, gain) and those of different songs are not (an overdrive from another
+    song can sound much quieter than the distortion). Order: the same song; one by the same artist
+    (filling missing sounds with the closest one, if at least two distinct tones remain); one that has
+    all the sounds.
+    Returns {category: (file, description)}; empty if there is no library or no song fits."""
     index_path = TONES_DIR / "index.json"
     cats = [c for c in categories if c in TONE_CATEGORIES]
     if not index_path.exists() or len(cats) < 2:
@@ -178,7 +180,7 @@ def tone_set(categories: list[str], artist: str | None, title: str | None,
         by_song.setdefault(e["Song"], []).append(e)
 
     def assign(song: str) -> tuple[dict[str, dict], int]:
-        """Tonos de la canción para cada sonido y cuántos son de su categoría exacta."""
+        """The song's tones for each sound, and how many are of their exact category."""
         out, exact = {}, 0
         for c in cats:
             for i, cand in enumerate([c] + CATEGORY_FALLBACK.get(c, [])):
@@ -193,12 +195,12 @@ def tone_set(categories: list[str], artist: str | None, title: str | None,
 
     same_song = [s for s in by_song if artist and title and norm(s) == norm(f"{artist} - {title}")]
     same_artist = [s for s in by_song if artist and norm(s.split(" - ")[0]) == norm(artist)]
-    for label, songs, need_exact in (("misma canción", same_song, False), ("mismo artista", same_artist, False),
-                                     ("otra canción con todos los sonidos", sorted(by_song), True)):
+    for label, songs, need_exact in (("same song", same_song, False), ("same artist", same_artist, False),
+                                     ("another song with all the sounds", sorted(by_song), True)):
         best = None
         for song in songs:
             got, exact = assign(song)
-            # Tiene que quedar algún contraste: si todos los sonidos acaban en el mismo tono, no sirve
+            # Some contrast must remain: if every sound ends up on the same tone, it is useless
             distinct = len({e["File"] for e in got.values()})
             if len(got) == len(cats) and distinct >= 2 and (not need_exact or exact == len(cats)):
                 if best is None or exact > best[2]:
@@ -206,29 +208,30 @@ def tone_set(categories: list[str], artist: str | None, title: str | None,
         if best:
             song, got, _ = best
             return {c: (TONES_DIR / e["File"], f"{label}: {song} / {e['Name']} ({e['Descriptors']})"
-                        + ("" if e["Descriptors"] in TONE_CATEGORIES[c] else f", en lugar de {c}"))
+                        + ("" if e["Descriptors"] in TONE_CATEGORIES[c] else f", instead of {c}"))
                     for c, e in got.items()}
     return {}
 
 
+# Track-name hints; "ritm", "r[ií]tmica" and "voz" also cover Spanish-named tracks
 LEAD_HINT = re.compile(r"lead|solo|hammett|slash|gilmour", re.I)
 RHYTHM_HINT = re.compile(r"rhythm|rhytm|ritm|r[ií]tmica|hetfield|izzy", re.I)
 NOT_GUITAR = re.compile(r"voice|vocal|voz|melod|keys|piano|synth|organ|strings", re.I)
 
 
 def choose_tracks(info: dict) -> tuple[int, int | None, str]:
-    """Elige las pistas Lead y Rhythm de la tab. Devuelve (lead, rhythm, explicación)."""
+    """Picks the tab's Lead and Rhythm tracks. Returns (lead, rhythm, explanation)."""
     bars = max(1, info["bars"])
     guitars = [t for t in info["tracks"]
                if t["strings"] in (6, 7) and not t["is_percussion"] and t["bars_with_notes"] >= 0.1 * bars
                and not NOT_GUITAR.search(t["name"])]
     if not guitars:
-        # Sin guitarras: usar la pista con altura que más compases cubra (p. ej. un bajo tocado en guitarra)
+        # No guitars: use the pitched track covering the most bars (e.g. a bass played on guitar)
         pitched = [t for t in info["tracks"] if not t["is_percussion"] and t["bars_with_notes"] > 0]
         if not pitched:
-            raise PipelineError("La tab no tiene pistas con notas.")
+            raise PipelineError("The tab has no tracks with notes.")
         best = max(pitched, key=lambda t: t["bars_with_notes"])
-        return best["index"], None, f"Lead = {best['name']} (no hay pistas de guitarra)"
+        return best["index"], None, f"Lead = {best['name']} (no guitar tracks)"
 
     cover = lambda t: t["bars_with_notes"] / bars
     by_cover = sorted(guitars, key=lambda t: -t["bars_with_notes"])
@@ -237,18 +240,18 @@ def choose_tracks(info: dict) -> tuple[int, int | None, str]:
 
     if lead_hint:
         lead = max(lead_hint, key=lambda t: t["bars_with_notes"])
-        why = "por nombre"
+        why = "by name"
     else:
         major = [t for t in by_cover if cover(t) >= 0.5]
         if len(major) >= 2 and not (rhythm_hint and rhythm_hint[0] in major[:2]):
             lead = max(major[:2], key=lambda t: t["mean_fret"])
-            why = "la de trastes más altos de las dos principales"
+            why = "the higher-fretted of the two main ones"
         elif rhythm_hint and len(major) >= 2:
             lead = next(t for t in major if t is not rhythm_hint[0])
-            why = "la principal que no es rítmica"
+            why = "the main one that is not rhythm"
         else:
             lead = by_cover[0]
-            why = "la que más compases cubre"
+            why = "the one covering the most bars"
     rest = [t for t in by_cover if t is not lead and cover(t) >= 0.25]
     rhythm_cands = [t for t in rest if t in rhythm_hint] or rest
     rhythm = rhythm_cands[0] if rhythm_cands else None
@@ -259,7 +262,7 @@ def choose_tracks(info: dict) -> tuple[int, int | None, str]:
 
 
 def lookup_song(artist: str, title: str, on_log: Callable[[str], None] = print) -> dict:
-    """Busca álbum, año y portada en la API pública de iTunes. Devuelve {} si no hay resultado."""
+    """Looks up album, year and cover in the public iTunes API. Returns {} if nothing is found."""
     import urllib.parse
     import urllib.request
 
@@ -268,7 +271,7 @@ def lookup_song(artist: str, title: str, on_log: Callable[[str], None] = print) 
         with urllib.request.urlopen(f"https://itunes.apple.com/search?{query}", timeout=10) as resp:
             results = json.loads(resp.read().decode("utf-8")).get("results", [])
     except OSError as e:
-        on_log(f"(sin conexión con iTunes: {e})")
+        on_log(f"(cannot reach iTunes: {e})")
         return {}
     norm = lambda s: re.sub(r"[^a-z0-9]", "", (s or "").lower())
     for r in results:
@@ -289,27 +292,27 @@ def download_cover(url: str, dest: Path, on_log: Callable[[str], None] = print) 
             dest.write_bytes(resp.read())
         return dest
     except OSError as e:
-        on_log(f"(no se pudo descargar la portada: {e})")
+        on_log(f"(could not download the cover: {e})")
         return None
 
 
 def slug(text: str) -> str:
-    return re.sub(r"[^a-z0-9]+", "-", text.lower()).strip("-") or "cancion"
+    return re.sub(r"[^a-z0-9]+", "-", text.lower()).strip("-") or "song"
 
 
 def deploy(psarc: Path, on_log: Callable[[str], None] = print) -> Path:
-    """Copia el .psarc a dlc/ con un número de versión nuevo y borra las versiones anteriores.
+    """Copies the .psarc to dlc/ with a new version number and deletes the previous versions.
 
-    El juego no relee un archivo que sustituimos con el mismo nombre mientras está abierto
-    (la canción desaparece al elegirla), pero sí detecta archivos nuevos al volver al título.
+    The game does not reread a file replaced under the same name while it is running
+    (the song disappears when selected), but it does detect new files when returning to the title screen.
     """
     key = re.sub(r"_v\d+_p\.psarc$", "", psarc.name)
     pattern = re.compile(rf"^{re.escape(key)}_v(\d+)_p\.psarc$")
     target_dir = dlc_dir()
     if not target_dir.is_dir():
-        raise PipelineError(f"No existe la carpeta del juego: {target_dir}. Elígela en Ajustes.")
+        raise PipelineError(f"The game folder does not exist: {target_dir}. Choose it in Settings.")
     old = [p for p in target_dir.glob(f"{key}_v*_p.psarc") if pattern.match(p.name)]
-    # La versión del paquete (va en el título que se ve en el juego) si es nueva; si no, la siguiente libre
+    # The package's version (shown in the in-game title) if it is new; otherwise the next free one
     own = re.search(r"_v(\d+)_p\.psarc$", psarc.name)
     version = max(max((int(pattern.match(p.name).group(1)) for p in old), default=0) + 1,
                   int(own.group(1)) if own else 0)
@@ -319,26 +322,26 @@ def deploy(psarc: Path, on_log: Callable[[str], None] = print) -> Path:
         try:
             p.unlink()
         except OSError as e:
-            on_log(f"No se pudo borrar {p.name} ({e}); bórralo con el juego cerrado.")
+            on_log(f"Could not delete {p.name} ({e}); delete it with the game closed.")
     return target
 
 
 def inspect_tab(tab: Path) -> dict:
-    """Pistas y metadatos de la tab (RsBuild inspect-json)."""
+    """The tab's tracks and metadata (RsBuild inspect-json)."""
     return json.loads(rsbuild("inspect-json", str(Path(tab).resolve())))
 
 
 def build_tones(dlc: Path | None = None) -> str:
-    """Extrae la biblioteca de tonos de los CDLC instalados en build/tones."""
+    """Extracts the tone library from the installed CDLC into build/tones."""
     return rsbuild("tones", str(Path(dlc or dlc_dir()).resolve()), str(TONES_DIR)).strip()
 
 
-COMMON_FRETS = 22                   # muchas guitarras tienen 21 o 22 trastes; Rocksmith admite hasta 24
+COMMON_FRETS = 22                   # many guitars have 21 or 22 frets; Rocksmith allows up to 24
 
 
 def high_fret_notes(pkg: Path, bar_times_ms: list[float]) -> list[str]:
-    """Notas por encima del traste COMMON_FRETS en los arrangements generados: posible error de la tab
-    (o una nota que muchas guitarras no pueden tocar). Una línea por arrangement con compás y minuto."""
+    """Notes above fret COMMON_FRETS in the generated arrangements: a possible tab error
+    (or a note many guitars cannot play). One line per arrangement with bar and minute."""
     import bisect
     import xml.etree.ElementTree as ET
 
@@ -353,12 +356,12 @@ def high_fret_notes(pkg: Path, bar_times_ms: list[float]) -> list[str]:
                 found += [(float(c.get("time")), int(cn.get("fret"))) for cn in c.findall("chordNote")]
         found = sorted({(t, f) for t, f in found if f > COMMON_FRETS})
         if found:
-            where = [f"traste {f} en el compás {bisect.bisect_right(bar_times_ms, t * 1000)} "
+            where = [f"fret {f} in bar {bisect.bisect_right(bar_times_ms, t * 1000)} "
                      f"({int(t // 60)}:{t % 60:04.1f})" for t, f in found[:8]]
-            more = f" y {len(found) - 8} más" if len(found) > 8 else ""
+            more = f" and {len(found) - 8} more" if len(found) > 8 else ""
             kind = xml.stem.removeprefix("arr_").removesuffix("_RS2").capitalize()
-            out.append(f"{kind}: {len(found)} notas por encima del traste {COMMON_FRETS} (muchas guitarras no "
-                       f"llegan; puede ser un error de la tab): {', '.join(where)}{more}")
+            out.append(f"{kind}: {len(found)} notes above fret {COMMON_FRETS} (many guitars cannot "
+                       f"reach them; may be a tab error): {', '.join(where)}{more}")
     return out
 
 
@@ -366,20 +369,20 @@ def high_fret_notes(pkg: Path, bar_times_ms: list[float]) -> list[str]:
 class BuildOptions:
     audio: Path
     tab: Path
-    lead: int | None = None             # None: elección automática
-    rhythm: int | None = None           # None: automática (salvo no_rhythm)
+    lead: int | None = None             # None: automatic choice
+    rhythm: int | None = None           # None: automatic (unless no_rhythm)
     no_rhythm: bool = False
     artist: str | None = None
     title: str | None = None
     album: str | None = None
     year: int | None = None
     cover: str | None = None
-    tone: str | None = None             # archivo o categoría; None: automático
-    name: str | None = None             # carpeta en build/
-    variant: str | None = None          # variante: título y clave propios, convive con la versión normal
-    pad: float = 4.0                    # segundos de silencio al inicio (count-in)
+    tone: str | None = None             # file or category; None: automatic
+    name: str | None = None             # folder in build/
+    variant: str | None = None          # variant: own title and key, coexists with the normal version
+    pad: float = 4.0                    # seconds of silence at the start (count-in)
     deploy: bool = True
-    lookup: bool = True                 # álbum, año y portada desde iTunes
+    lookup: bool = True                 # album, year and cover from iTunes
 
 
 @dataclass
@@ -393,29 +396,29 @@ class BuildResult:
     tracks: str
     tone: str
     alignment: dict = field(default_factory=dict)
-    warnings: list[str] = field(default_factory=list)   # avisos para el usuario (también en el informe)
+    warnings: list[str] = field(default_factory=list)   # warnings for the user (also in the report)
 
 
 def build_song(opts: BuildOptions, on_step: Callable[[int, str], None] = lambda n, t: None,
                on_log: Callable[[str], None] = lambda line: None) -> BuildResult:
-    """Genera el CDLC. on_step(n, título) marca el inicio de cada paso (0..STEPS); on_log, cada línea de detalle."""
+    """Generates the CDLC. on_step(n, title) marks the start of each step (0..STEPS); on_log, each detail line."""
     if WINGET_LINKS.is_dir() and str(WINGET_LINKS) not in os.environ["PATH"]:
         os.environ["PATH"] = os.environ["PATH"] + os.pathsep + str(WINGET_LINKS)
     wwise = find_wwise()
     if wwise is None:
-        raise PipelineError("No se encontró Wwise 2019–2023. Instálalo desde el Wwise Launcher (paquete Authoring).")
+        raise PipelineError("Wwise 2019–2023 not found. Install it from the Wwise Launcher (Authoring package).")
 
     audio_in = Path(opts.audio).resolve()
     tab = Path(opts.tab).resolve()
     if not audio_in.is_file():
-        raise PipelineError(f"No existe el audio: {audio_in}")
+        raise PipelineError(f"Audio file does not exist: {audio_in}")
     if not tab.is_file():
-        raise PipelineError(f"No existe la tab: {tab}")
+        raise PipelineError(f"Tab file does not exist: {tab}")
     log_lines = lambda text: [on_log(line) for line in text.strip().splitlines()]
 
-    # Metadatos y pistas: lo que no venga en las opciones sale de la tab
+    # Metadata and tracks: whatever the options do not give comes from the tab
     info = inspect_tab(tab)
-    meta = {"artist": opts.artist or info["artist"] or "Desconocido",
+    meta = {"artist": opts.artist or info["artist"] or "Unknown",
             "title": opts.title or info["title"] or tab.stem,
             "album": opts.album or info["album"] or "",
             "year": opts.year, "cover": opts.cover}
@@ -426,7 +429,7 @@ def build_song(opts: BuildOptions, on_step: Callable[[int, str], None] = lambda 
             tracks_desc = tracks_desc.split(", Rhythm")[0]
     else:
         lead, rhythm = opts.lead, (None if opts.no_rhythm else opts.rhythm)
-        tracks_desc = f"Lead = pista {lead}" + (f", Rhythm = pista {rhythm}" if rhythm is not None else "")
+        tracks_desc = f"Lead = track {lead}" + (f", Rhythm = track {rhythm}" if rhythm is not None else "")
     out = ROOT / "build" / (opts.name or slug(f"{meta['artist']} {meta['title']} {opts.variant or ''}"))
     out.mkdir(parents=True, exist_ok=True)
     on_step(0, f"{meta['artist']} - {meta['title']} | {tracks_desc}")
@@ -439,42 +442,42 @@ def build_song(opts: BuildOptions, on_step: Callable[[int, str], None] = lambda 
             cover = download_cover(found["cover_url"], out / "cover.jpg", on_log)
             meta["cover"] = str(cover) if cover else None
         if found:
-            on_log(f"iTunes: {meta['album']} ({meta['year']}), portada {'sí' if meta['cover'] else 'no'}")
+            on_log(f"iTunes: {meta['album']} ({meta['year']}), cover {'yes' if meta['cover'] else 'no'}")
 
-    on_step(1, f"Audio → WAV (+{opts.pad:g} s de silencio)")
+    on_step(1, f"Audio → WAV (+{opts.pad:g} s of silence)")
     try:
         wav = audio.to_wav(audio_in, out / "song.wav", pad_seconds=opts.pad)
     except subprocess.CalledProcessError as e:
-        raise PipelineError("ffmpeg no pudo convertir el audio (¿archivo dañado o formato no soportado?)",
+        raise PipelineError("ffmpeg could not convert the audio (damaged file or unsupported format?)",
                             (e.stderr or b"").decode("utf-8", "replace")) from e
-    except RuntimeError as e:                       # audio.ffmpeg_exe: no está en el PATH
-        raise PipelineError("No se encontró ffmpeg. Instálalo (winget install Gyan.FFmpeg) y vuelve a intentarlo.") from e
+    except RuntimeError as e:                       # audio.ffmpeg_exe: not on the PATH
+        raise PipelineError("ffmpeg not found. Install it (winget install Gyan.FFmpeg) and try again.") from e
 
-    on_step(2, "Línea de tiempo de la tab")
+    on_step(2, "Tab timeline")
     log_lines(rsbuild("timeline", str(tab), str(out / "timeline.json")))
 
-    on_step(3, "Alineación tab ↔ audio (armonía + batería + tempo)")
+    on_step(3, "Tab ↔ audio alignment (harmony + drums + tempo)")
     r = align.align_hybrid(out / "timeline.json", wav, out / "bar_times.json")
-    bpm_note = (f"compás 1 en {r['bar_times_ms'][0] / 1000:.2f} s, relación de tempo {r['tempo_ratio_median']}, "
-                f"corrección media sobre la armonía: {r['mean_abs_offset_ms']} ms, "
-                f"compases con tempo raro: {len(r['suspicious_bars'])}")
+    bpm_note = (f"bar 1 at {r['bar_times_ms'][0] / 1000:.2f} s, tempo ratio {r['tempo_ratio_median']}, "
+                f"mean correction over harmony: {r['mean_abs_offset_ms']} ms, "
+                f"bars with odd tempo: {len(r['suspicious_bars'])}")
     on_log(bpm_note)
     tl = json.loads((out / "timeline.json").read_text(encoding="utf-8"))
     warnings = []
     if not any(n[2] < 0 for n in tl["notes"]):
-        warnings.append("La tab no tiene batería: la alineación fina puede ser menos precisa.")
+        warnings.append("The tab has no drums: fine alignment may be less accurate.")
     for k, sec in r.get("gaps", []):
-        warnings.append(f"La grabación tiene {sec:.1f} s que no están en la tab antes del compás {k}: ese tramo queda sin notas.")
+        warnings.append(f"The recording has {sec:.1f} s not in the tab before bar {k}: that stretch has no notes.")
     if r["suspicious_bars"]:
-        warnings.append(f"{len(r['suspicious_bars'])} compases con un tempo muy distinto del resto (pueden estar desfasados): "
-                        + ", ".join(f"c{k}" for k in r["suspicious_bars"][:12]) + ("…" if len(r["suspicious_bars"]) > 12 else ""))
+        warnings.append(f"{len(r['suspicious_bars'])} bars with a tempo very different from the rest (may be off): "
+                        + ", ".join(f"b{k}" for k in r["suspicious_bars"][:12]) + ("…" if len(r["suspicious_bars"]) > 12 else ""))
     for w in warnings:
-        on_log(f"AVISO: {w}")
+        on_log(f"WARNING: {w}")
 
     lead_program = next((t["program"] for t in info["tracks"] if t["index"] == lead), None)
     tone_path, tone_desc = resolve_tone(opts.tone, meta["artist"], meta["title"], lead_program)
-    # Pistas que cambian de sonido (instrumento o textos de la tab): un tono por sonido, salvo que se haya
-    # pedido un tono concreto
+    # Tracks that change sound (instrument or tab texts): one tone per sound, unless a specific tone
+    # was requested
     per_track_tones: dict[str, dict[str, Path]] = {}
     tone_lines = []
     for kind, idx in (("lead", lead), ("rhythm", rhythm)):
@@ -487,8 +490,8 @@ def build_song(opts: BuildOptions, on_step: Callable[[int, str], None] = lambda 
             per_track_tones[kind] = {c: path for c, (path, _desc) in chosen.items()}
             tone_lines += [f"{kind.capitalize()}, {c}: {desc}" for c, (_path, desc) in chosen.items()]
     if per_track_tones:
-        tone_desc += "; con cambios de tono: " + "; ".join(tone_lines)
-    on_step(4, f"XML, audio Wwise y empaquetado — tono: {tone_desc}")
+        tone_desc += "; with tone changes: " + "; ".join(tone_lines)
+    on_step(4, f"XML, Wwise audio and packaging — tone: {tone_desc}")
     args = ["build", "--tab", str(tab), "--lead", str(lead), "--bar-times", str(out / "bar_times.json"),
             "--wav", str(wav), "--out-dir", str(out / "pkg")]
     if rhythm is not None:
@@ -500,7 +503,7 @@ def build_song(opts: BuildOptions, on_step: Callable[[int, str], None] = lambda 
     if tone_path:
         args += ["--tone", str(tone_path)]
     if dlc_dir().is_dir():
-        args += ["--dlc-dir", str(dlc_dir())]        # versión siguiente a las del juego, en el título
+        args += ["--dlc-dir", str(dlc_dir())]        # next version after the game's ones, in the title
     if opts.variant:
         args += ["--variant", opts.variant]
     for kind, chosen in per_track_tones.items():
@@ -509,33 +512,33 @@ def build_song(opts: BuildOptions, on_step: Callable[[int, str], None] = lambda 
     log_lines(log)
     m = re.search(r"PSARC:\s+(.+)", log)
     if not m:
-        raise PipelineError("RsBuild no informó del .psarc generado", log)
+        raise PipelineError("RsBuild did not report the generated .psarc", log)
     psarc = Path(m.group(1).strip())
 
     high = high_fret_notes(out / "pkg", r["bar_times_ms"])
     for line in high:
-        on_log(f"AVISO: {line}")
+        on_log(f"WARNING: {line}")
     warnings += high
 
     report = out / "pkg" / "report.md"
     with report.open("a", encoding="utf-8") as f:
         if warnings:
-            f.write("\n## Avisos\n" + "".join(f"- {line}\n" for line in warnings))
-        f.write(f"\n## Pistas\n- {tracks_desc}\n")
-        f.write(f"\n## Tono\n- {tone_desc}\n")
-        f.write(f"\n## Alineación\n- {bpm_note}\n")
+            f.write("\n## Warnings\n" + "".join(f"- {line}\n" for line in warnings))
+        f.write(f"\n## Tracks\n- {tracks_desc}\n")
+        f.write(f"\n## Tone\n- {tone_desc}\n")
+        f.write(f"\n## Alignment\n- {bpm_note}\n")
         if r["suspicious_bars"]:
-            f.write(f"- Compases con tempo raro: {r['suspicious_bars'][:40]}\n")
+            f.write(f"- Bars with odd tempo: {r['suspicious_bars'][:40]}\n")
         if r.get("gaps"):
-            f.write(f"- Audio que no está en la tab (compás, segundos): {r['gaps']}\n")
+            f.write(f"- Audio not in the tab (bar, seconds): {r['gaps']}\n")
 
     deployed = None
     if opts.deploy:
         deployed = deploy(psarc, on_log)
-        on_step(5, f"Copiado a {deployed}")
-        on_log("Vuelve a la pantalla de título del juego para que lo cargue.")
+        on_step(5, f"Copied to {deployed}")
+        on_log("Go back to the game's title screen so it loads it.")
     else:
-        on_step(5, f"Sin copiar a dlc/: {psarc}")
+        on_step(5, f"Not copied to dlc/: {psarc}")
     return BuildResult(out_dir=out, psarc=psarc, report=report, deployed=deployed,
                        cover=Path(meta["cover"]) if meta["cover"] else None, meta=meta,
                        tracks=tracks_desc, tone=tone_desc, alignment=r, warnings=warnings)

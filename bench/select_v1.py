@@ -1,4 +1,4 @@
-"""Elige el banco de pruebas: 24 canciones variadas (12 desarrollo + 12 validación, equilibradas)."""
+"""Picks the benchmark: 24 varied songs (12 dev + 12 validation, balanced)."""
 import json, numpy as np, collections, re, random
 
 songs = [json.loads(l) for l in open("build/bench/survey_all.jsonl", encoding="utf-8")]
@@ -20,16 +20,16 @@ for s in songs:
     mode = np.bincount(per).argmax() if len(per) else 4
     meter = int(np.sum(per != mode)) if len(per) else 0
     desc = " ".join(tone_by_song.get(norm(f"{s['artist']} - {s['title']}"), []))
-    tone = ("acústica" if "Acoustic" in desc else "distorsión" if re.search("Distortion|High Gain|Fuzz", desc)
-            else "limpio/overdrive" if desc else "?")
+    tone = ("acoustic" if "Acoustic" in desc else "distortion" if re.search("Distortion|High Gain|Fuzz", desc)
+            else "clean/overdrive" if desc else "?")
     rows.append(dict(artist=s["artist"], title=s["title"], path=s["path"], bpm=round(60000 / med),
                      drift=round(drift, 4), meter=meter, length=round(s["length"]), tone=tone))
 
-stab = lambda r: "metrónomo" if r["drift"] < 0.01 else "variable"
+stab = lambda r: "metronome" if r["drift"] < 0.01 else "variable"
 met = lambda r: "irregular" if r["meter"] >= 4 else "regular"
-print(len(rows), "canciones;", collections.Counter((stab(r), met(r)) for r in rows))
+print(len(rows), "songs;", collections.Counter((stab(r), met(r)) for r in rows))
 
-# 6 canciones por grupo (estabilidad × compás), variando velocidad y tono; una por artista.
+# 6 songs per group (stability × meter), varying tempo and tone; one per artist.
 random.seed(7); random.shuffle(rows)
 groups = collections.defaultdict(list)
 for r in rows:
@@ -40,14 +40,14 @@ for key in sorted(groups):
     for r in sorted(groups[key], key=lambda r: (r["tone"] == "?",)):
         if r["artist"] in artists:
             continue
-        sig = (r["tone"], "lento" if r["bpm"] < 100 else "medio" if r["bpm"] < 150 else "rápido")
+        sig = (r["tone"], "slow" if r["bpm"] < 100 else "medium" if r["bpm"] < 150 else "fast")
         if sig in seen and len(seen) < 6:
             continue
         picked.append(r); seen.add(sig); artists.add(r["artist"])
         if len(picked) == 6:
             break
     for i, r in enumerate(picked):
-        r["set"] = "desarrollo" if i % 2 == 0 else "validación"
+        r["set"] = "dev" if i % 2 == 0 else "validation"
     chosen += picked
 
 for r in sorted(chosen, key=lambda r: (r["set"], stab(r), met(r))):
