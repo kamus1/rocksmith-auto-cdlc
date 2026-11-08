@@ -24,7 +24,7 @@ d = ROOT / "build" / "bench" / "songs" / a.song
 wav = wem_to_wav(d)
 tl_path, truth = build_timeline(d, a.drop, f"_diag{os.getpid()}")
 if a.oracle:
-    align.tempo_dp = lambda *_a, **_k: (truth.copy(), [])
+    align.tempo_dp = lambda *_a, **_k: (truth.copy(), [], None)
 res = align.align_hybrid(tl_path, wav, d / f"bt_diag{os.getpid()}.json", **json.loads(a.params))
 tl_text = tl_path.read_text(); tl_path.unlink(); (d / f"bt_diag{os.getpid()}.json").unlink()
 tl = json.loads(tl_text)

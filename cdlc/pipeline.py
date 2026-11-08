@@ -496,6 +496,9 @@ def build_song(opts: BuildOptions, on_step: Callable[[int, str], None] = lambda 
         warnings.append("The tab has no drums: fine alignment may be less accurate.")
     for k, sec in r.get("gaps", []):
         warnings.append(f"The recording has {sec:.1f} s not in the tab before bar {k}: that stretch has no notes.")
+    if r.get("tail_cut_bar"):
+        warnings.append(f"The recording ends before the tab (fade-out?): bars {r['tail_cut_bar']} to "
+                        f"{len(r['bar_times_ms']) - 1} are left out.")
     if r["suspicious_bars"]:
         warnings.append(f"{len(r['suspicious_bars'])} bars with a tempo very different from the rest (may be off): "
                         + ", ".join(f"b{k}" for k in r["suspicious_bars"][:12]) + ("…" if len(r["suspicious_bars"]) > 12 else ""))
@@ -559,6 +562,8 @@ def build_song(opts: BuildOptions, on_step: Callable[[int, str], None] = lambda 
             f.write(f"- Bars with odd tempo: {r['suspicious_bars'][:40]}\n")
         if r.get("gaps"):
             f.write(f"- Audio not in the tab (bar, seconds): {r['gaps']}\n")
+        if r.get("tail_cut_bar"):
+            f.write(f"- The recording ends before the tab: bars from {r['tail_cut_bar']} on left out\n")
 
     deployed = None
     if opts.deploy:
