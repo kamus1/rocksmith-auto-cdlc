@@ -36,6 +36,19 @@ def cmd_inspect(a: argparse.Namespace) -> None:
     print(pipeline.rsbuild("inspect", str(Path(a.tab).resolve())))
 
 
+def cmd_check(a: argparse.Namespace) -> None:
+    missing = 0
+    for key, value, fix, required in pipeline.environment_checks():
+        if value:
+            print(f"  OK       {key:8s} {value}")
+        else:
+            missing += required
+            print(f"  {'MISSING' if required else 'optional':8s} {key:8s} {fix}")
+    print("\nReady." if not missing else f"\n{missing} required item(s) missing.")
+    if missing:
+        raise SystemExit(1)
+
+
 def cmd_web(a: argparse.Namespace) -> None:
     import threading
     import webbrowser
@@ -85,7 +98,10 @@ def main(argv: list[str] | None = None) -> None:
     i.add_argument("--tab", required=True)
     i.set_defaults(func=cmd_inspect)
 
-    w = sub.add_parser("web", help="open the local web UI (http://127.0.0.1:8000)")
+    c = sub.add_parser("check", help="check that everything the build needs is installed")
+    c.set_defaults(func=cmd_check)
+
+    w = sub.add_parser("web",help="open the local web UI (http://127.0.0.1:8000)")
     w.add_argument("--port", type=int, default=8000)
     w.add_argument("--no-browser", action="store_true", help="do not open the browser")
     w.set_defaults(func=cmd_web)

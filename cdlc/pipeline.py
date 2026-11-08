@@ -68,6 +68,34 @@ def find_wwise() -> str | None:
     return None
 
 
+def tone_count() -> int:
+    path = TONES_DIR / "index.json"
+    try:
+        return len(json.loads(path.read_text(encoding="utf-8")))
+    except (OSError, ValueError):
+        return 0
+
+
+def environment_checks() -> list[tuple[str, str | None, str, bool]]:
+    """(key, value found or None, how to fix it, required) for each thing the build needs."""
+    ffmpeg = shutil.which("ffmpeg") or shutil.which("ffmpeg", path=str(WINGET_LINKS))
+    dotnet = shutil.which("dotnet") or (DOTNET if Path(DOTNET).exists() else None)
+    tones = tone_count()
+    return [
+        ("wwise", find_wwise(),
+         "Wwise 2019–2023, Authoring package (2024 or later does not work). Install it with the "
+         "Audiokinetic Launcher (free account).", True),
+        ("ffmpeg", ffmpeg, "winget install Gyan.FFmpeg", True),
+        ("dotnet", dotnet, ".NET 10 SDK: winget install Microsoft.DotNet.SDK.10", True),
+        ("rsbuild", str(RSBUILD) if RSBUILD.exists() else None,
+         "Compiled RsBuild: dotnet build src/RsBuild -c Release (also built automatically the first time).", False),
+        ("dlc", str(dlc_dir()) if dlc_dir().is_dir() else None,
+         f"Rocksmith 2014 dlc/ folder ({dlc_dir()} does not exist): set it in the web app's Settings.", True),
+        ("tones", f"{tones} tones" if tones else None,
+         "Tone library (optional): run \"cdlc tones\"; without it a default tone is used.", False),
+    ]
+
+
 def rsbuild(*args: str, env: dict | None = None) -> str:
     if not RSBUILD.exists():
         subprocess.run([DOTNET, "build", str(ROOT / "src" / "RsBuild"), "-c", "Release", "-v", "q"], check=True)

@@ -298,21 +298,9 @@ def tones_rebuild():
 
 @app.get("/api/status")
 def status():
-    ffmpeg = shutil.which("ffmpeg") or shutil.which("ffmpeg", path=str(pipeline.WINGET_LINKS))
-    checks = [
-        ("wwise", pipeline.find_wwise(), "Wwise 2019–2023 (Authoring package). 2024 or later is not supported."),
-        ("ffmpeg", ffmpeg, "ffmpeg on the PATH (winget install Gyan.FFmpeg)."),
-        ("dotnet", shutil.which("dotnet") or (pipeline.DOTNET if Path(pipeline.DOTNET).exists() else None),
-         ".NET 10 SDK."),
-        ("rsbuild", str(pipeline.RSBUILD) if pipeline.RSBUILD.exists() else None,
-         "Compiled RsBuild (dotnet build src/RsBuild -c Release); built automatically the first time."),
-        ("dlc", str(dlc_dir()) if dlc_dir().is_dir() else None,
-         f"Rocksmith 2014 dlc/ folder ({dlc_dir()} does not exist): choose it in Settings."),
-        ("tones", f"{len(_tone_index())} tones" if _tone_index() else None,
-         "Tone library: without it a default tone is used."),
-    ]
     busy = next((j.id for j in JOBS.values() if not j.finished), None)
-    return {"checks": [{"key": k, "ok": bool(v), "value": v, "help": h} for k, v, h in checks],
+    return {"checks": [{"key": k, "ok": bool(v), "value": v, "help": h}
+                       for k, v, h, _ in pipeline.environment_checks()],
             "busy_job": busy}
 
 
