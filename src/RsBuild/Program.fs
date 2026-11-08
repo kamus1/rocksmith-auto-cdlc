@@ -9,8 +9,9 @@ open System.IO
 let tabToXml (tab: string) (track: int) (kind: ArrangementBuilder.ArrangementKind) (barTimes: AlphaTab.Model.Score -> int list -> float[] * float[] * string list)
              (songLengthMs: int) (outXml: string) (toneKeys: Map<string, string>) =
     let score = GpImport.load tab
-    let order = GpImport.playbackOrder score
-    let times, ends, timingNotes = barTimes score order
+    let times, ends, timingNotes = barTimes score (GpImport.playbackOrder score)
+    // Fewer bar times than bars: the recording ends before the tab and the rest is left out
+    let order = GpImport.playbackOrder score |> List.truncate (times.Length - 1)
     let r = ArrangementBuilder.build score track kind order times ends songLengthMs
     let arr = r.Arrangement
     let segs =
@@ -110,13 +111,22 @@ let main argv =
             int r.TotalTime.TotalMilliseconds
         let barTimesJson = Path.GetFullPath(req "bar-times")
         let timing _ _ =
-            let times, ends, suspicious = Align.loadBarTimes barTimesJson
+            let times, ends, suspicious, cut = Align.loadBarTimes barTimesJson
+            let dropped =
+                match cut with
+                | Some c when c >= 2 && c <= ends.Length ->
+                    [ $"ALIGNMENT: the recording ends before the tab: bars {c} to {ends.Length} left out (fade-out or a longer written ending)" ]
+                | _ -> []
+            let times, ends =
+                match cut with
+                | Some c when c >= 2 && c <= ends.Length -> times[.. c - 1], ends[.. c - 2]
+                | _ -> times, ends
             let gaps =
                 [ for k in 0 .. ends.Length - 1 do
                       if times[k + 1] - ends[k] > 1.0 then
                           yield $"ALIGNMENT: {(times[k + 1] - ends[k]) / 1000.0:F1} s of audio not in the tab before bar {k + 2} (left without notes)" ]
             let notes =
-                gaps @
+                dropped @ gaps @
                 (if suspicious.IsEmpty then []
                  else [ $"ALIGNMENT: {suspicious.Length} bars with tempo >10%% off the median: " +
                         (suspicious |> List.truncate 30 |> List.map (sprintf "b%d") |> String.concat ", ") ])

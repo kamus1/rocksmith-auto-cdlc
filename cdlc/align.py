@@ -136,7 +136,8 @@ def tempo_dp(tl: dict, y: np.ndarray, T_guess: np.ndarray, ratio_span: float = 0
              tempo_weight: float = 0.002, band: int = 3, jump_cost: float = 1.0, grid_ms: float = 25.0,
              samples: int = 16, start_ms: float = 0.0, chroma_lag_ms: float = 160.0,
              gap_cost: float | np.ndarray = 0.2, end_ms: float = np.inf, silence_db: float = -50.0,
-             lead_slack_bars: int | None = 2, use_held: bool = True) -> tuple[np.ndarray, list[tuple[int, float]]]:
+             lead_slack_bars: int | None = 2, use_held: bool = True, tail_cost: float = 0.1,
+             tail_margin_ms: float = 3000.0, tail_min_bars: int = 4) -> tuple[np.ndarray, list[tuple[int, float]], int | None]:
     """Start (ms) of each bar via dynamic programming with a plausible tempo model.
 
     State at each bar boundary: (instant in the audio, in grid_ms steps; tempo ratio of the previous
@@ -156,8 +157,15 @@ def tempo_dp(tl: dict, y: np.ndarray, T_guess: np.ndarray, ratio_span: float = 0
 
     Gaps: between two bars there may be audio that is not in the tab (a repeat or a longer ending in
     the recording), at a cost of gap_cost. Without this, everything after it is pulled earlier. The
-    bar before the gap is stretched up to the next one. Returns (starts, [(bar after the gap, gap
-    seconds)]).
+    bar before the gap is stretched up to the next one.
+
+    Tail cut: the recording may end before the tab (a fade-out over a written ending). The path can
+    then stop at a bar boundary within tail_margin_ms of the audio end, at tail_cost per dropped bar
+    with notes, dropping at least tail_min_bars of them (fewer can be a quiet ending below the
+    audio-end threshold that is still in the recording); otherwise the end constraint squeezes the
+    whole second half of the song. The dropped bars continue at the last tempo, past the audio end.
+
+    Returns (starts, [(bar after the gap, gap seconds)], first dropped bar or None).
 
     Chroma only: adding the tab's onsets was tried and it shifted whole songs by several beats
     (repetitive riffs match just as well when shifted); that is left to the fine step, with a short
@@ -174,7 +182,7 @@ def tempo_dp(tl: dict, y: np.ndarray, T_guess: np.ndarray, ratio_span: float = 0
         if 0 <= k < n and midi >= 0:
             has[k] = True
     if not has.any():
-        return T_guess, []
+        return T_guess, [], None
     # Bars with emission: with some attack or some note still sounding (bend, tie)
     emit = has.copy()
     for t_ms, d_ms, midi in _held(tl, use_held):
@@ -221,6 +229,11 @@ def tempo_dp(tl: dict, y: np.ndarray, T_guess: np.ndarray, ratio_span: float = 0
     # Bits per boundary: used = reached through a gap; fresh = the minimum of g was renewed at t-1.
     used_gap = [None] * (k1 - k0)
     fresh_min = [None] * (k1 - k0)
+    # Tail cut: best (cost, boundary, r, t) ending at the audio end before bar k1
+    n_drop = np.cumsum(has[::-1])[::-1]                              # bars with notes from k on
+    t_ms_grid = t_idx * grid_ms - chroma_lag_ms
+    near_end = np.abs(t_ms_grid - end_ms) <= tail_margin_ms
+    tail = None
     for j, k in enumerate(range(k0, k1)):
         if j > 0:
             prev = np.concatenate([np.full((R, 1), np.inf, dtype=np.float32), cost[:, :-1]], axis=1)
@@ -264,6 +277,14 @@ def tempo_dp(tl: dict, y: np.ndarray, T_guess: np.ndarray, ratio_span: float = 0
                 new[i, dur:] = val[:n_g - dur]
         backs_r[j] = br
         cost = new
+        # Boundary k + 1 at the audio end, dropping bars k + 1 .. k1 - 1 (the second half only)
+        if (np.isfinite(end_ms) and k + 1 < k1 and n_drop[k + 1] >= tail_min_bars and k + 1 - k0 >= (k1 - k0) // 2
+                and near_end.any()):
+            sub = np.where(near_end[None, :], cost, np.inf)
+            r_t, t_t = np.unravel_index(int(np.argmin(sub)), sub.shape)
+            c = float(sub[r_t, t_t]) + tail_cost * int(n_drop[k + 1])
+            if np.isfinite(c) and (tail is None or c < tail[0]):
+                tail = (c, k + 1, int(r_t), int(t_t))
     # Backtrack: at each boundary, (r of the previous bar, t)
     # End constraint: the last note (in chroma time, which lags chroma_lag_ms behind) cannot
     # sound after the audio ends
@@ -271,6 +292,10 @@ def tempo_dp(tl: dict, y: np.ndarray, T_guess: np.ndarray, ratio_span: float = 0
     for i, r in enumerate(ratios):
         cost[i, t_idx * grid_ms - (st[k1] - last_note) * r - chroma_lag_ms > end_ms + 150] = np.inf
     r_i, t_i = np.unravel_index(int(np.argmin(cost)), cost.shape)
+    cut = None
+    if tail is not None and tail[0] < float(cost[r_i, t_i]):
+        _c, cut, r_i, t_i = tail
+        k1 = cut
     T = np.zeros(n + 1)
     T[k1] = t_i * grid_ms
     gaps = []
@@ -295,7 +320,7 @@ def tempo_dp(tl: dict, y: np.ndarray, T_guess: np.ndarray, ratio_span: float = 0
     rb = (T[k1] - T[k1 - edge]) / max(st[k1] - st[k1 - edge], 1)
     T[:k0] = T[k0] + (st[:k0] - st[k0]) * ra
     T[k1 + 1:] = T[k1] + (st[k1 + 1:] - st[k1]) * rb
-    return T, sorted(gaps)
+    return T, sorted(gaps), cut
 
 
 def chroma_curve_score(tl: dict, y: np.ndarray, T: np.ndarray, use_held: bool = True,
@@ -480,14 +505,16 @@ def align_hybrid(timeline_json: Path, wav: Path, out_json: Path, radius_beats: f
         first_ms = T_s[k] + offs + (T_s[k + 1] - gap_ms[k] - T_s[k]) * f0
         return 1e3 * w_ref * np.maximum(0, start_ms - 150 - first_ms) / beat_ms
 
-    def fine(T_s: np.ndarray, gap_ms: np.ndarray) -> tuple[np.ndarray, np.ndarray, float]:
-        """Fine step over the coarse curve T_s. Returns (starts, offsets, cost in w_ref units)."""
-        beat_ms = float(np.median((T_s[1:] - gap_ms - T_s[:-1]) / lens))   # typical quarter-note duration
+    def fine(T_s: np.ndarray, gap_ms: np.ndarray, cut: int | None) -> tuple[np.ndarray, np.ndarray, float]:
+        """Fine step over the coarse curve T_s. Bars from cut on (past the audio end) only follow
+        the curve. Returns (starts, offsets, cost in w_ref units)."""
+        kept = slice(0, cut)
+        beat_ms = float(np.median((T_s[1:] - gap_ms - T_s[:-1])[kept] / lens[kept]))   # typical quarter-note duration
         offs = np.arange(-radius_beats * beat_ms, radius_beats * beat_ms + 0.001, grid_ms)
         m = len(offs)
 
         def emission(k: int) -> np.ndarray:
-            return bar_emission(k, T_s, gap_ms, offs)
+            return 0.0 if cut is not None and k >= cut else bar_emission(k, T_s, gap_ms, offs)
 
         # Cost of changing the offset between consecutive bars (≈ local tempo change)
         d = (offs[None, :] - offs[:, None]) / beat_ms
@@ -512,7 +539,7 @@ def align_hybrid(timeline_json: Path, wav: Path, out_json: Path, radius_beats: f
             T[k] = max(T[k], T[k - 1] + 1)
         return T, offs[idx], float(cost[idx[n]]) / w_ref
 
-    def tempo_refine(T_s: np.ndarray, gap_ms: np.ndarray) -> np.ndarray:
+    def tempo_refine(T_s: np.ndarray, gap_ms: np.ndarray, cut: int | None) -> np.ndarray:
         """Alternative to the coarse-stage curve using the fine-step emission and a second-order tempo model.
 
         The coarse stage decides by chroma, which on repeated patterns may prefer a slow drift of
@@ -521,7 +548,8 @@ def align_hybrid(timeline_json: Path, wav: Path, out_json: Path, radius_beats: f
         the end), up to ±refine_radius_beats around T_s, and what costs is changing tempo between
         consecutive bars: refine_weight × (Δ log tempo ratio)². Keeping a constant tempo is free, even
         if it moves away from T_s. It is only a candidate: kept if the fine step over it gives a better cost."""
-        beat_ms = float(np.median((T_s[1:] - gap_ms - T_s[:-1]) / lens))
+        kept = slice(0, cut)
+        beat_ms = float(np.median((T_s[1:] - gap_ms - T_s[:-1])[kept] / lens[kept]))
         R = min(refine_radius_beats * beat_ms, refine_max_ms)
         offs = np.arange(-R, R + 0.001, refine_grid_ms)
         m = len(offs)
@@ -548,7 +576,8 @@ def align_hybrid(timeline_json: Path, wav: Path, out_json: Path, radius_beats: f
             tot = C[:, :, None] + lam * change
             bi = np.argmin(tot, axis=0)                                                    # (j, l)
             best = np.take_along_axis(tot, bi[None], axis=0)[0]
-            C = np.where(np.isnan(r), big, best - bar_emission(k, T_s, gap_ms, offs))
+            em = 0.0 if cut is not None and k >= cut else bar_emission(k, T_s, gap_ms, offs)
+            C = np.where(np.isnan(r), big, best - em)
             backs[k] = bi
             r_prev = r
         j, l = np.unravel_index(int(np.argmin(C)), C.shape)
@@ -569,17 +598,17 @@ def align_hybrid(timeline_json: Path, wav: Path, out_json: Path, radius_beats: f
     start_ms = audio_start_ms(wav)
     end_ms = librosa.effects.trim(y, top_db=40)[1][1] / SR * 1000
     tp = dict(start_ms=start_ms, end_ms=end_ms, use_held=use_held, **(tempo_params or {}))
-    T_s, gaps = tempo_dp(tl, y, T_c, **tp)
+    T_s, gaps, cut = tempo_dp(tl, y, T_c, **tp)
     gap_ms = np.zeros(n)                                   # audio not in the tab after bar k
     for k, sec in gaps:
         gap_ms[k - 1] = sec * 1000
-    T, off, score = fine(T_s, gap_ms)
+    T, off, score = fine(T_s, gap_ms, cut)
     score_nogap = None
     if gaps:
-        T_s0, _ = tempo_dp(tl, y, T_c, **{**tp, "gap_cost": np.inf})
-        T0, off0, score_nogap = fine(T_s0, np.zeros(n))
+        T_s0, _, cut0 = tempo_dp(tl, y, T_c, **{**tp, "gap_cost": np.inf})
+        T0, off0, score_nogap = fine(T_s0, np.zeros(n), cut0)
         if score_nogap <= score + gap_select_margin * len(gaps):
-            T, off, gaps, gap_ms, T_s, score = T0, off0, [], np.zeros(n), T_s0, score_nogap
+            T, off, gaps, gap_ms, T_s, score, cut = T0, off0, [], np.zeros(n), T_s0, score_nogap, cut0
     # Each gap is decided separately: try removing it (banning ±gap_ban_bars bars, so the DP does not
     # put it right next to it) and moving it (banning only its spot and neighbors), and keep the option
     # with the best fine cost. Otherwise a real gap can drag a false one along (previously all or none
@@ -597,18 +626,18 @@ def align_hybrid(timeline_json: Path, wav: Path, out_json: Path, radius_beats: f
                 tried.add((k_gap, ban))
                 gc = np.full(n + 1, float(base_cost))
                 gc[max(0, k_gap - ban):k_gap + ban + 1] = np.inf
-                T_b, gaps_b = tempo_dp(tl, y, T_c, **{**tp, "gap_cost": gc})
+                T_b, gaps_b, cut_b = tempo_dp(tl, y, T_c, **{**tp, "gap_cost": gc})
                 if len(gaps_b) > len(gaps) or [g for g, _ in gaps_b] == [g for g, _ in gaps]:
                     continue
                 gm_b = np.zeros(n)
                 for k, sec in gaps_b:
                     gm_b[k - 1] = sec * 1000
-                T2, off2, score2 = fine(T_b, gm_b)
+                T2, off2, score2 = fine(T_b, gm_b, cut_b)
                 if score2 <= score + gap_select_margin * (len(gaps_b) - len(gaps)) and (best is None or score2 < best[2]):
-                    best = (T2, off2, score2, T_b, gaps_b, gm_b)
+                    best = (T2, off2, score2, T_b, gaps_b, gm_b, cut_b)
         if best is None:
             break
-        T, off, score, T_s, gaps, gap_ms = best
+        T, off, score, T_s, gaps, gap_ms, cut = best
 
     # Intermediate stage: alternative curve with the fine-step emission; kept if it improves the fine cost
     # Criterion: fine-step gain + refine_chroma × change in coarse-stage chroma > refine_margin.
@@ -616,15 +645,15 @@ def align_hybrid(timeline_json: Path, wav: Path, out_json: Path, radius_beats: f
     # by a beat (Queen, Joy Division); there the chroma gets worse or the gain is small.
     refine_gain = refine_dchroma = None
     if refine_weight > 0:
-        T_m = tempo_refine(T_s, gap_ms)
-        T2, off2, score2 = fine(T_m, gap_ms)
+        T_m = tempo_refine(T_s, gap_ms, cut)
+        T2, off2, score2 = fine(T_m, gap_ms, cut)
         refine_gain = round(score - score2, 2)
         refine_dchroma = round(chroma_curve_score(tl, y, T2, use_held) - chroma_curve_score(tl, y, T, use_held), 3)
         if refine_gain + refine_chroma * refine_dchroma > refine_margin:
             T, off, score, T_s = T2, off2, score2, T_m
 
     ends = np.maximum(T[1:] - gap_ms, T[:-1] + 1)          # actual end of each bar (before the gap)
-    ratio = (ends - T[:-1]) / np.diff(st)
+    ratio = ((ends - T[:-1]) / np.diff(st))[:cut]            # dropped bars do not count
     med = float(np.median(ratio))
     result = {
         "bar_times_ms": [round(float(t), 1) for t in T],
@@ -639,6 +668,9 @@ def align_hybrid(timeline_json: Path, wav: Path, out_json: Path, radius_beats: f
         "count_in_bars": n_count_in,
         # Audio not in the tab: (bar, 1-based, that starts after the gap; seconds)
         "gaps": [(int(k + 1), round(float(sec), 2)) for k, sec in gaps],
+        # First bar (1-based) past the audio end, when the recording ends before the tab (fade-out);
+        # it and the following bars get no notes. None: the whole tab is in the recording
+        "tail_cut_bar": None if cut is None else int(cut + 1),
         "mean_abs_offset_ms": round(float(np.mean(np.abs(off))), 1),
         # Fine-step cost (in units of the typical bar weight) with and without the proposed gaps
         "fine_cost_with_gaps": round(score, 2),
