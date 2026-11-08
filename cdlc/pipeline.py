@@ -243,7 +243,7 @@ def tone_set(categories: list[str], artist: str | None, title: str | None,
 
 # Track-name hints; "ritm", "r[ií]tmica" and "voz" also cover Spanish-named tracks
 LEAD_HINT = re.compile(r"lead|solo|hammett|slash|gilmour", re.I)
-RHYTHM_HINT = re.compile(r"rhythm|rhytm|ritm|r[ií]tmica|hetfield|izzy", re.I)
+RHYTHM_HINT = re.compile(r"rh?yth?m|ritm|r[ií]tmica|hetfield|izzy", re.I)
 NOT_GUITAR = re.compile(r"voice|vocal|voz|melod|keys|piano|synth|organ|strings", re.I)
 
 
