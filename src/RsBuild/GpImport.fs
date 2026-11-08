@@ -54,16 +54,16 @@ let inspect (path: string) =
         s.MasterBars
         |> Seq.collect (fun mb -> mb.TempoAutomations |> Seq.map (fun a -> int mb.Index + 1, a.Value))
         |> Seq.toList
-    printfn "Tempos:   %s" (tempos |> List.map (fun (b, v) -> $"c{b}={v}") |> String.concat ", ")
+    printfn "Tempos:   %s" (tempos |> List.map (fun (b, v) -> $"b{b}={v}") |> String.concat ", ")
 
     let sigs =
         s.MasterBars
         |> Seq.pairwise
         |> Seq.filter (fun (a, b) -> a.TimeSignatureNumerator <> b.TimeSignatureNumerator || a.TimeSignatureDenominator <> b.TimeSignatureDenominator)
-        |> Seq.map (fun (_, b) -> $"c{int b.Index + 1}={b.TimeSignatureNumerator}/{b.TimeSignatureDenominator}")
+        |> Seq.map (fun (_, b) -> $"b{int b.Index + 1}={b.TimeSignatureNumerator}/{b.TimeSignatureDenominator}")
         |> Seq.toList
     let first = s.MasterBars[0]
-    printfn "Time sig: c1=%d/%d %s" (int first.TimeSignatureNumerator) (int first.TimeSignatureDenominator) (String.concat ", " sigs)
+    printfn "Time sig: b1=%d/%d %s" (int first.TimeSignatureNumerator) (int first.TimeSignatureDenominator) (String.concat ", " sigs)
 
     let repeats = s.MasterBars |> Seq.filter (fun mb -> mb.IsRepeatStart || mb.RepeatCount > 0.0) |> Seq.length
     printfn "Repeats:  %d marks" repeats

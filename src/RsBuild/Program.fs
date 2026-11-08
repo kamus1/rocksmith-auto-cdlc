@@ -119,7 +119,7 @@ let main argv =
                 gaps @
                 (if suspicious.IsEmpty then []
                  else [ $"ALIGNMENT: {suspicious.Length} bars with tempo >10%% off the median: " +
-                        (suspicious |> List.truncate 30 |> List.map (sprintf "c%d") |> String.concat ", ") ])
+                        (suspicious |> List.truncate 30 |> List.map (sprintf "b%d") |> String.concat ", ") ])
             times, ends, notes
         let tab = Path.GetFullPath(req "tab")
         let parts =

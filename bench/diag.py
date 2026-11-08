@@ -43,5 +43,5 @@ print(f"bars with notes off by more than ½ beat: {bad.sum()}/{(notes > 0).sum()
 show = np.ones(n, bool) if a.all else np.convolve(bad, np.ones(7), "same") > 0
 for k in range(n):
     if show[k]:
-        print(f"c{k + 1:4d} {truth[k] / 1000:7.2f}s notes {notes[k]:3d}  beat {beat[k]:4.0f} ms  coarse {ec[k]:+5.2f}  fine {ef[k]:+5.2f}"
+        print(f"b{k + 1:4d} {truth[k] / 1000:7.2f}s notes {notes[k]:3d}  beat {beat[k]:4.0f} ms  coarse {ec[k]:+5.2f}  fine {ef[k]:+5.2f}"
               + ("  <--" if bad[k] else ""))
