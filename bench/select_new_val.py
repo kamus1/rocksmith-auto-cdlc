@@ -3,7 +3,9 @@
 Elige 12 canciones nuevas (3 por grupo estabilidad × compás) excluyendo las del banco y sus artistas,
 con el mismo criterio que select_v1.py. Reescribe build/bench/benchmark.json (guarda el reparto anterior
 en "set_v1") y deja la lista para extract.fsx en build/bench/extract_new.txt.
-Uso: .venv/Scripts/python bench/select_new_val.py [--seed 11]
+Uso: .venv/Scripts/python bench/select_new_val.py [--seed 11] [--prev desarrollo|<etiqueta>]
+--prev: a qué conjunto pasa la validación anterior (por defecto, a desarrollo; con otra etiqueta, se aparta
+y el desarrollo no cambia). El reparto anterior queda en "set_vN".
 """
 import argparse, collections, json, random, re
 from pathlib import Path
@@ -14,11 +16,11 @@ ROOT = Path(__file__).resolve().parent.parent
 B = ROOT / "build" / "bench"
 p = argparse.ArgumentParser()
 p.add_argument("--seed", type=int, default=11)
+p.add_argument("--prev", default="desarrollo", help="conjunto al que pasa la validación anterior")
 a = p.parse_args()
 
 bench = json.loads((B / "benchmark.json").read_text(encoding="utf-8"))
-if any("set_v1" in s for s in bench):
-    raise SystemExit("benchmark.json ya tiene un segundo reparto (set_v1); no se repite")
+round_ = 1 + max((int(k[5:]) for s in bench for k in s if k.startswith("set_v")), default=0)
 used_paths = {s["path"] for s in bench}
 used_artists = {s["artist"].lower() for s in bench}
 
@@ -74,8 +76,9 @@ for r in chosen:
     print(f"{r['artist'][:22]:22s} | {r['title'][:30]:30s} | {r['bpm']:3d} bpm | {stab(r):9s} {r['drift']*100:4.1f}% | "
           f"{met(r):9s} ({r['meter']:3d}) | {r['tone']}")
 for s in bench:
-    s["set_v1"] = s["set"]
-    s["set"] = "desarrollo"
+    s[f"set_v{round_}"] = s["set"]
+    if s["set"] == "validación":
+        s["set"] = a.prev
 slug = lambda t: re.sub(r"[^a-z0-9]+", "-", t.lower()).strip("-")
 (B / "extract_new.txt").write_text(
     "\n".join(f"{r['path']}|{B / 'songs' / slug(r['artist'] + ' ' + r['title'])}" for r in chosen), encoding="utf-8")

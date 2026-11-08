@@ -145,7 +145,7 @@ def run_song(song: dict, kwargs: dict, drop: int = 0) -> dict:
 
 def main() -> None:
     p = argparse.ArgumentParser()
-    p.add_argument("--set", default="desarrollo", choices=["desarrollo", "validación", "todos"])
+    p.add_argument("--set", default="desarrollo", help="desarrollo, validación, todos u otra etiqueta de benchmark.json")
     p.add_argument("--workers", type=int, default=4)
     p.add_argument("--tag", default="")
     p.add_argument("--quitar", type=int, default=0, help="quitar N compases de la tab hacia el 60 %% (estructura distinta)")

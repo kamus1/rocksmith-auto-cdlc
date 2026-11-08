@@ -298,6 +298,40 @@ def tempo_dp(tl: dict, y: np.ndarray, T_guess: np.ndarray, ratio_span: float = 0
     return T, sorted(gaps)
 
 
+def chroma_curve_score(tl: dict, y: np.ndarray, T: np.ndarray, use_held: bool = True,
+                       grid_ms: float = 25.0, chroma_lag_ms: float = 160.0, silence_db: float = -50.0) -> float:
+    """Emisión de croma de la etapa gruesa (la de tempo_dp: similitud menos su media en todo el audio) sumada
+    sobre los compases, para unos inicios de compás T dados. Sirve para comparar dos curvas con el criterio
+    de la armonía."""
+    import librosa
+
+    st = np.array(tl["bar_starts_ms"])
+    n = len(st) - 1
+    hop_ms = HOP_CHROMA_S * 1000
+    n_tab = int(st[-1] / hop_ms) + 2
+    X = librosa.util.normalize(np.log1p(_tab_chroma(tl, n_tab, use_held) * 10), norm=2, axis=0, fill=False)
+    hop = int(round(HOP_CHROMA_S * SR))
+    Y = np.log1p(librosa.feature.chroma_cqt(y=y, sr=SR, hop_length=hop) * 10)
+    rms = librosa.feature.rms(y=y, hop_length=hop)[0][:Y.shape[1]]
+    Y[:, :len(rms)][:, 20 * np.log10(rms / (rms.max() + 1e-12) + 1e-12) < silence_db] = 0
+    n_g = int((Y.shape[1] - 1) * hop_ms / grid_ms) + 1
+    pos = np.arange(n_g) * grid_ms / hop_ms
+    i0 = np.minimum(pos.astype(int), Y.shape[1] - 2)
+    fr = (pos - i0)[None, :]
+    Y = librosa.util.normalize(Y[:, i0] * (1 - fr) + Y[:, i0 + 1] * fr, norm=2, axis=0, fill=False)
+    total = 0.0
+    for k in range(min(n, len(T) - 1)):
+        ts = st[k] + (st[k + 1] - st[k]) * np.arange(16) / 16
+        rows = np.clip(np.rint(ts / hop_ms).astype(int), 0, n_tab - 1)
+        if not X[:, rows].any():
+            continue
+        S = X[:, rows].T @ Y
+        S -= S.mean(axis=1, keepdims=True)
+        at = T[k] + (ts - st[k]) * (T[k + 1] - T[k]) / (st[k + 1] - st[k]) + chroma_lag_ms
+        total += float(S[np.arange(16), np.clip(np.rint(at / grid_ms).astype(int), 0, n_g - 1)].mean())
+    return total
+
+
 def drum_envelopes(y: np.ndarray) -> tuple[dict, float]:
     """Envolventes de onsets por banda: graves (bombo), medios (caja), agudos (platos) y total."""
     import librosa
@@ -368,6 +402,8 @@ def align_hybrid(timeline_json: Path, wav: Path, out_json: Path, radius_beats: f
                  chroma_weight: float = 3.0, chroma_parts: int = 4, anchor_weight: float = 0.3,
                  gap_select_margin: float = 0.0, anchor_ref_ms: float | None = 450.0,
                  use_held: bool = True, per_gap_select: bool = True, gap_ban_bars: int = 4,
+                 refine_weight: float = 1000.0, refine_radius_beats: float = 4.0, refine_max_ms: float = 2000.0,
+                 refine_grid_ms: float = 40.0, refine_margin: float = 1.5, refine_chroma: float = 20.0,
                  tempo_params: dict | None = None) -> dict:
     """Alineación híbrida (ver docstring del módulo y docs/ALINEACION.md)."""
     import librosa
@@ -424,6 +460,27 @@ def align_hybrid(timeline_json: Path, wav: Path, out_json: Path, radius_beats: f
             total = total + np.tensordot(tab_parts[k, p], v, axes=(0, 0))
         return total / chroma_parts
 
+    def bar_emission(k: int, T_s: np.ndarray, gap_ms: np.ndarray, offs: np.ndarray) -> np.ndarray:
+        """(m, m): emisión del compás k (ataques por banda + croma por trozos) si empieza con el desplazamiento
+        offs[i] sobre T_s y termina (antes del hueco, si lo hay) con offs[j]."""
+        m = len(offs)
+        a = T_s[k] + offs[:, None]
+        b = T_s[k + 1] - gap_ms[k] + offs[None, :]
+        total = np.zeros((m, m))
+        for band, frac, w in per_bar[k]:
+            times = a[:, :, None] + (b - a)[:, :, None] * frac[None, None, :]
+            total += scorers[band](times, w)
+        return total + chroma_weight * w_ref * chroma_score(k, np.broadcast_to(a, (m, m)), np.broadcast_to(b, (m, m)))
+
+    def start_penalty(k: int, T_s: np.ndarray, gap_ms: np.ndarray, offs: np.ndarray, beat_ms: float) -> np.ndarray:
+        """Restricción general: la primera nota de la tab no puede sonar antes de que empiece el audio.
+        Resuelve ambigüedades de ciclos que se repiten (p. ej. dos compases de los mismos acordes en toda la
+        canción) sin suponer que la tab empieza a la vez que el audio (puede haber una intro sin la tab).
+        Penalización finita y creciente: si ningún desplazamiento la cumple, gana el que menos la viola."""
+        f0 = min(fr.min() for _, fr, _ in per_bar[k])
+        first_ms = T_s[k] + offs + (T_s[k + 1] - gap_ms[k] - T_s[k]) * f0
+        return 1e3 * w_ref * np.maximum(0, start_ms - 150 - first_ms) / beat_ms
+
     def fine(T_s: np.ndarray, gap_ms: np.ndarray) -> tuple[np.ndarray, np.ndarray, float]:
         """Paso fino sobre la curva gruesa T_s. Devuelve (inicios, desplazamientos, coste en unidades de w_ref)."""
         beat_ms = float(np.median((T_s[1:] - gap_ms - T_s[:-1]) / lens))   # duración típica de una negra
@@ -431,14 +488,7 @@ def align_hybrid(timeline_json: Path, wav: Path, out_json: Path, radius_beats: f
         m = len(offs)
 
         def emission(k: int) -> np.ndarray:
-            """(m, m): de desplazamiento i en el inicio del compás k a j en el inicio del k+1."""
-            a = T_s[k] + offs[:, None]
-            b = T_s[k + 1] - gap_ms[k] + offs[None, :]
-            total = np.zeros((m, m))
-            for band, frac, w in per_bar[k]:
-                times = a[:, :, None] + (b - a)[:, :, None] * frac[None, None, :]
-                total += scorers[band](times, w)
-            return total + chroma_weight * w_ref * chroma_score(k, np.broadcast_to(a, (m, m)), np.broadcast_to(b, (m, m)))
+            return bar_emission(k, T_s, gap_ms, offs)
 
         # Coste de cambiar el desplazamiento entre compases consecutivos (≈ cambio de tempo local)
         d = (offs[None, :] - offs[:, None]) / beat_ms
@@ -446,19 +496,11 @@ def align_hybrid(timeline_json: Path, wav: Path, out_json: Path, radius_beats: f
         # Ancla suave a la curva gruesa: sin ella, en tramos de ritmo ambiguo el paso fino se va a ±1 beat
         anchor = anchor_weight * w_ref * (offs / min(beat_ms, anchor_ref_ms or beat_ms)) ** 2
 
-        # Restricción general: la primera nota de la tab no puede sonar antes de que empiece el audio.
-        # Resuelve ambigüedades de ciclos que se repiten (p. ej. dos compases de los mismos acordes en
-        # toda la canción) sin suponer que la tab empieza a la vez que el audio (puede haber una intro
-        # de batería o voz que no está en la tab).
         cost = np.zeros(m)
         back = np.zeros((n, m), dtype=np.int32)
         for k in range(n):
             if k == first:
-                f0 = min(fr.min() for _, fr, _ in per_bar[k])
-                first_ms = T_s[k] + offs + (T_s[k + 1] - gap_ms[k] - T_s[k]) * f0
-                # Penalización finita y creciente: si la etapa gruesa empieza demasiado pronto y ningún
-                # desplazamiento la cumple, se elige el que menos la viola en vez de colapsar con inf
-                cost = cost + 1e3 * w_ref * np.maximum(0, start_ms - 150 - first_ms) / beat_ms
+                cost = cost + start_penalty(k, T_s, gap_ms, offs, beat_ms)
             total = cost[:, None] + trans - emission(k)
             back[k] = np.argmin(total, axis=0)
             cost = total[back[k], np.arange(m)] + anchor
@@ -470,6 +512,55 @@ def align_hybrid(timeline_json: Path, wav: Path, out_json: Path, radius_beats: f
         for k in range(1, n + 1):
             T[k] = max(T[k], T[k - 1] + 1)
         return T, offs[idx], float(cost[idx[n]]) / w_ref
+
+    def tempo_refine(T_s: np.ndarray, gap_ms: np.ndarray) -> np.ndarray:
+        """Curva alternativa a la etapa gruesa con la emisión del paso fino y un modelo de tempo de segundo orden.
+
+        La etapa gruesa decide con la croma, que en patrones repetidos puede preferir una deriva lenta de
+        varios beats (Yes: hasta +2,8 beats en 90 compases); el paso fino, anclado a ella, no puede corregirla
+        aunque su emisión prefiera la curva buena. Aquí el estado es (desplazamiento al inicio del compás,
+        al final), hasta ±refine_radius_beats sobre T_s, y lo que cuesta es cambiar de tempo entre compases
+        consecutivos: refine_weight × (Δ log relación de tempo)². Mantener un tempo constante no cuesta,
+        aunque se aleje de T_s. Solo es un candidato: se queda si el paso fino sobre él da mejor coste."""
+        beat_ms = float(np.median((T_s[1:] - gap_ms - T_s[:-1]) / lens))
+        R = min(refine_radius_beats * beat_ms, refine_max_ms)
+        offs = np.arange(-R, R + 0.001, refine_grid_ms)
+        m = len(offs)
+        L = np.maximum(np.diff(st), 1.0)
+        base = T_s[1:] - gap_ms - T_s[:-1]                   # duración de cada compás en la etapa gruesa
+        dmat = offs[None, :] - offs[:, None]                 # desplazamiento final - inicial
+
+        def log_ratio(k: int) -> np.ndarray:
+            dur = base[k] + dmat
+            return np.where(dur > 10, np.log(np.maximum(dur, 1e-3) / L[k]), np.nan)
+
+        big = 1e12
+        r_prev = log_ratio(0)
+        C = np.where(np.isnan(r_prev), big, -bar_emission(0, T_s, gap_ms, offs))
+        if first == 0:
+            C = C + start_penalty(0, T_s, gap_ms, offs, beat_ms)[:, None]
+        backs = np.zeros((n, m, m), dtype=np.int16)
+        lam = refine_weight * w_ref
+        for k in range(1, n):
+            if k == first:
+                C = C + start_penalty(k, T_s, gap_ms, offs, beat_ms)[None, :]
+            r = log_ratio(k)
+            change = np.nan_to_num((r[None, :, :] - r_prev[:, :, None]) ** 2, nan=1e6)   # (i, j, l)
+            tot = C[:, :, None] + lam * change
+            bi = np.argmin(tot, axis=0)                                                    # (j, l)
+            best = np.take_along_axis(tot, bi[None], axis=0)[0]
+            C = np.where(np.isnan(r), big, best - bar_emission(k, T_s, gap_ms, offs))
+            backs[k] = bi
+            r_prev = r
+        j, l = np.unravel_index(int(np.argmin(C)), C.shape)
+        idx = np.zeros(n + 1, dtype=int)
+        idx[n], idx[n - 1] = l, j
+        for k in range(n - 1, 0, -1):
+            idx[k - 1] = backs[k, idx[k], idx[k + 1]]
+        T = T_s + offs[idx]
+        for k in range(1, n + 1):
+            T[k] = max(T[k], T[k - 1] + 1)
+        return T
 
     # Dos hipótesis: la tab tiene la misma estructura que la grabación, o le faltan trozos (los huecos
     # que propone la DP de tempo). Decide el paso fino, que además ve los ataques: la croma sola no
@@ -520,6 +611,19 @@ def align_hybrid(timeline_json: Path, wav: Path, out_json: Path, radius_beats: f
             break
         T, off, score, T_s, gaps, gap_ms = best
 
+    # Etapa intermedia: curva alternativa con la emisión del paso fino; se queda si mejora el coste fino
+    # Criterio: ganancia del paso fino + refine_chroma × cambio de la croma de la etapa gruesa > refine_margin.
+    # El paso fino sabe corregir derivas (Yes) pero, con libertad, puede desplazar un beat tramos de ritmo
+    # ambiguo (Queen, Joy Division); ahí la croma empeora o la ganancia es pequeña.
+    refine_gain = refine_dchroma = None
+    if refine_weight > 0:
+        T_m = tempo_refine(T_s, gap_ms)
+        T2, off2, score2 = fine(T_m, gap_ms)
+        refine_gain = round(score - score2, 2)
+        refine_dchroma = round(chroma_curve_score(tl, y, T2, use_held) - chroma_curve_score(tl, y, T, use_held), 3)
+        if refine_gain + refine_chroma * refine_dchroma > refine_margin:
+            T, off, score, T_s = T2, off2, score2, T_m
+
     ends = np.maximum(T[1:] - gap_ms, T[:-1] + 1)          # fin real de cada compás (antes del hueco)
     ratio = (ends - T[:-1]) / np.diff(st)
     med = float(np.median(ratio))
@@ -540,6 +644,9 @@ def align_hybrid(timeline_json: Path, wav: Path, out_json: Path, radius_beats: f
         # Coste del paso fino (en unidades del peso típico de un compás) con y sin los huecos propuestos
         "fine_cost_with_gaps": round(score, 2),
         "fine_cost_without_gaps": None if score_nogap is None else round(score_nogap, 2),
+        # Mejora del coste fino con la etapa intermedia (> refine_margin: se usó); None si no se probó
+        "refine_gain": refine_gain,
+        "refine_chroma_change": refine_dchroma,
     }
     out_json.write_text(json.dumps(result, indent=1), encoding="utf-8")
     return result

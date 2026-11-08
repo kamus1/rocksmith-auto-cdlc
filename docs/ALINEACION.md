@@ -173,3 +173,16 @@ En desarrollo solo cambia Mastodon (6,3 % → 3,4 %). Con 2 compases quitados me
 
 Probado y descartado antes de esto, para la deriva de Mastodon: sujetar el tempo al local de los compases con notas (hereda la deriva de la primera pasada; 11 → 28 compases mal), una curva alternativa interpolada en los tramos vacíos elegida por coste fino (los vecinos también están desplazados) y un ancla proporcional a la densidad de notas (el paso fino solo cobra por desviarse de la forma de la curva gruesa, así que sigue su deriva). Con la curva verdadera como etapa gruesa el paso fino coloca bien los 175 compases de Mastodon: el fallo que queda en Yes y Mastodon es de la etapa gruesa.
 Herramienta de diagnóstico usada (fuera del repo): charts oficiales de una canción del banco movidos a los tiempos de nuestra alineación y empaquetados, para verla en el juego.
+
+### Etapa intermedia: corregir derivas de la etapa gruesa (07/11/2026)
+Yes y Mastodon: con la curva verdadera como etapa gruesa, el paso fino la mantiene y su coste es mejor; el fallo es una deriva lenta de la etapa gruesa (la croma la prefiere en patrones repetidos) que el paso fino, anclado, no puede corregir.
+**`tempo_refine`:** DP con estado (desplazamiento al inicio del compás, al final), hasta ±4 beats (máx. 2 s) sobre la etapa gruesa, rejilla de 40 ms, emisión del paso fino (ataques + croma por trozos) y coste por **cambiar de tempo entre compases consecutivos**, `refine_weight` × (Δ log relación)²: un tempo constante no cuesta aunque se aleje de la etapa gruesa. Es solo un candidato: se pasa por el paso fino y se acepta si **ganancia del coste fino + `refine_chroma` × cambio de la croma de la etapa gruesa > `refine_margin`** (1000, 20 y 1,5). Sin el criterio combinado se rompían Queen (4,6 % → 69 %: el paso fino, libre, desplaza un beat los tramos lentos; la croma empeora mucho) y Joy Division (0,8 % → 16,8 %: ganancia pequeña). Unos 8 s más por canción.
+Medidas de las que salen los umbrales (peso 1000): Yes +25,0 / −0,74 (113 → 24 compases mal), Queen +9,1 / −1,45 (4 → 50), Joy Division +3,1 / −0,09 (1 → 25), Mastodon +0,1 / −0,05 (20 → 8, rechazado por el margen), OutKast +2,9 / +0,01, Joni Mitchell +2,3 / −0,03. Pesos probados: 30 (no corrige Yes), 300 (rompe Cake, Machine Head…), 3000 (peor que 1000).
+
+| Versión | Desarrollo (24) | 2 compases quitados | Validación nueva (12, nunca vista) |
+|---|---|---|---|
+| Antes (`f4b4035`) | 2,7 % / 23 bien | 6,5 % / 17 bien | 5,5 % / 7 bien |
+| **Etapa intermedia** | **1,0 % / 23 bien** | **4,9 % / 17 bien** | **4,1 % / 9 bien** |
+
+Desarrollo: Yes 43,5 % → 6,3 %, OutKast y Joni Mitchell → 0 %; ninguna empeora. 2 compases quitados: mejoran Yes, Sabaton y Queensrÿche; OutKast 3,2 % → 3,8 % (un compás). Validación nueva (tercer conjunto, `bench/select_new_val.py --seed 23 --prev validación_v2`: Shinedown, All That Remains, Dream Theater, Audioslave, Audrey and Kate, Manic Street Preachers, Testament, Boston, Grateful Dead, Spacehog, Bill Withers, R.E.M.): Manic Street Preachers 10,4 % → 0 %, Dream Theater 6,4 % → 0 %; ninguna empeora. MoP igual (10 ms). **Esta validación ya está usada.**
+Quedan en la validación: Boston (18,9 %), Audioslave (17,5 %), Audrey and Kate (10,6 %); sin mirar todavía.
