@@ -10,6 +10,7 @@ import os
 import re
 import shutil
 import subprocess
+import unicodedata
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable
@@ -247,6 +248,27 @@ RHYTHM_HINT = re.compile(r"rh?yth?m|ritm|r[ií]tmica|hetfield|izzy", re.I)
 NOT_GUITAR = re.compile(r"voice|vocal|voz|melod|keys|piano|synth|organ|strings", re.I)
 
 
+# Words that say nothing about which song a file is
+NAME_NOISE = {"the", "a", "an", "and", "of", "de", "la", "el", "los", "las", "y", "feat", "ft", "audio", "official",
+              "video", "music", "lyrics", "lyric", "hd", "hq", "remaster", "remastered", "version", "live", "mp3",
+              "song", "track", "full", "album", "kbps", "1080p", "720p", "128k", "320k", "ver", "by", "tab"}
+
+
+def name_words(text: str | None) -> set[str]:
+    t = unicodedata.normalize("NFKD", text or "").encode("ascii", "ignore").decode().lower()
+    return {w for w in re.split(r"[^a-z0-9]+", t) if len(w) >= 2 and not w.isdigit() and w not in NAME_NOISE
+            and not re.fullmatch(r"\d+k|\d+p|v\d+", w)}
+
+
+def names_differ(artist: str | None, title: str | None, audio_file: Path) -> bool:
+    """True if the tab's artist and title share no word with the audio's file name and tags.
+    False when there is nothing to compare (tab without a title, audio named "song.mp3"...)."""
+    tab_words = name_words(title) | name_words(artist)
+    tg = audio.tags(audio_file)
+    audio_words = name_words(audio_file.stem) | name_words(tg.get("title")) | name_words(tg.get("artist"))
+    return bool(name_words(title)) and bool(audio_words) and not (tab_words & audio_words)
+
+
 def choose_tracks(info: dict) -> tuple[int, int | None, str]:
     """Picks the tab's Lead and Rhythm tracks. Returns (lead, rhythm, explanation)."""
     bars = max(1, info["bars"])
@@ -458,6 +480,12 @@ def build_song(opts: BuildOptions, on_step: Callable[[int, str], None] = lambda 
     else:
         lead, rhythm = opts.lead, (None if opts.no_rhythm else opts.rhythm)
         tracks_desc = f"Lead = track {lead}" + (f", Rhythm = track {rhythm}" if rhythm is not None else "")
+    # Tab and audio of different songs (the alignment would still produce something): warn early
+    name_warning = None
+    if info["title"] and names_differ(info["artist"], info["title"], audio_in):
+        name_warning = (f"The tab ({info['artist'] or '?'} - {info['title']}) and the audio ({audio_in.name}) "
+                        "seem to be different songs. Check them.")
+        on_log(f"WARNING: {name_warning}")
     out = ROOT / "build" / (opts.name or slug(f"{meta['artist']} {meta['title']} {opts.variant or ''}"))
     out.mkdir(parents=True, exist_ok=True)
     on_step(0, f"{meta['artist']} - {meta['title']} | {tracks_desc}")
@@ -491,7 +519,15 @@ def build_song(opts: BuildOptions, on_step: Callable[[int, str], None] = lambda 
                 f"bars with odd tempo: {len(r['suspicious_bars'])}")
     on_log(bpm_note)
     tl = json.loads((out / "timeline.json").read_text(encoding="utf-8"))
-    warnings = []
+    warnings = [name_warning] if name_warning else []
+    # Signs of a tab from another song (thresholds: 23 right pairs vs 10 crossed ones, see docs/ALIGNMENT.md)
+    kept = (r.get("tail_cut_bar") or len(r["bar_times_ms"])) - 1
+    odd = len(r["suspicious_bars"]) / max(kept, 1)
+    signs = ([f"little harmony in common ({r['chroma_match']})"] if r["chroma_match"] < 0.025 else []) + \
+            ([f"tempo ×{r['tempo_ratio_median']:.2f} the tab's"] if not 0.85 <= r["tempo_ratio_median"] <= 1.18 else []) + \
+            ([f"{odd:.0%} of bars off-tempo"] if odd > 0.5 else [])
+    if signs:
+        warnings.append(f"The tab may not match the audio ({', '.join(signs)}). Check they are the same song.")
     if not any(n[2] < 0 for n in tl["notes"]):
         warnings.append("The tab has no drums: fine alignment may be less accurate.")
     for k, sec in r.get("gaps", []):
@@ -503,7 +539,8 @@ def build_song(opts: BuildOptions, on_step: Callable[[int, str], None] = lambda 
         warnings.append(f"{len(r['suspicious_bars'])} bars with a tempo very different from the rest (may be off): "
                         + ", ".join(f"b{k}" for k in r["suspicious_bars"][:12]) + ("…" if len(r["suspicious_bars"]) > 12 else ""))
     for w in warnings:
-        on_log(f"WARNING: {w}")
+        if w is not name_warning:                   # already shown before the alignment
+            on_log(f"WARNING: {w}")
 
     lead_program = next((t["program"] for t in info["tracks"] if t["index"] == lead), None)
     tone_path, tone_desc = resolve_tone(opts.tone, meta["artist"], meta["title"], lead_program)

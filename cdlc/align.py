@@ -324,9 +324,12 @@ def tempo_dp(tl: dict, y: np.ndarray, T_guess: np.ndarray, ratio_span: float = 0
 
 
 def chroma_curve_score(tl: dict, y: np.ndarray, T: np.ndarray, use_held: bool = True,
-                       grid_ms: float = 25.0, chroma_lag_ms: float = 160.0, silence_db: float = -50.0) -> float:
+                       grid_ms: float = 25.0, chroma_lag_ms: float = 160.0, silence_db: float = -50.0,
+                       bars: int | None = None, mean: bool = False) -> float:
     """Coarse-stage chroma emission (tempo_dp's: similarity minus its mean over the whole audio) summed
-    over the bars, for given bar starts T. Used to compare two curves by the harmony criterion."""
+    over the bars, for given bar starts T. Used to compare two curves by the harmony criterion.
+    bars: only the first ones (e.g. up to the tail cut). mean: per bar with notes instead of the sum
+    (how well the tab matches the audio; near 0 if they are different songs)."""
     import librosa
 
     st = np.array(tl["bar_starts_ms"])
@@ -343,8 +346,8 @@ def chroma_curve_score(tl: dict, y: np.ndarray, T: np.ndarray, use_held: bool = 
     i0 = np.minimum(pos.astype(int), Y.shape[1] - 2)
     fr = (pos - i0)[None, :]
     Y = librosa.util.normalize(Y[:, i0] * (1 - fr) + Y[:, i0 + 1] * fr, norm=2, axis=0, fill=False)
-    total = 0.0
-    for k in range(min(n, len(T) - 1)):
+    total, count = 0.0, 0
+    for k in range(min(n, len(T) - 1, bars or n)):
         ts = st[k] + (st[k + 1] - st[k]) * np.arange(16) / 16
         rows = np.clip(np.rint(ts / hop_ms).astype(int), 0, n_tab - 1)
         if not X[:, rows].any():
@@ -353,7 +356,8 @@ def chroma_curve_score(tl: dict, y: np.ndarray, T: np.ndarray, use_held: bool = 
         S -= S.mean(axis=1, keepdims=True)
         at = T[k] + (ts - st[k]) * (T[k + 1] - T[k]) / (st[k + 1] - st[k]) + chroma_lag_ms
         total += float(S[np.arange(16), np.clip(np.rint(at / grid_ms).astype(int), 0, n_g - 1)].mean())
-    return total
+        count += 1
+    return total / max(count, 1) if mean else total
 
 
 def drum_envelopes(y: np.ndarray) -> tuple[dict, float]:
@@ -678,6 +682,8 @@ def align_hybrid(timeline_json: Path, wav: Path, out_json: Path, radius_beats: f
         # Fine-cost improvement from the intermediate stage (> refine_margin: it was used); None if not tried
         "refine_gain": refine_gain,
         "refine_chroma_change": refine_dchroma,
+        # Mean chroma match per bar (≈ 0: the tab and the audio may be different songs)
+        "chroma_match": round(chroma_curve_score(tl, y, T, use_held, bars=cut, mean=True), 3),
     }
     out_json.write_text(json.dumps(result, indent=1), encoding="utf-8")
     return result
