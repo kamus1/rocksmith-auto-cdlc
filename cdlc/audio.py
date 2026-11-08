@@ -25,6 +25,20 @@ def to_wav(src: Path, dst: Path, pad_seconds: float = 0.0) -> Path:
     return dst
 
 
+def tags(src: Path) -> dict[str, str]:
+    """Title and artist from the audio file's tags (empty if it has none or ffmpeg fails)."""
+    try:
+        err = subprocess.run([ffmpeg_exe(), "-hide_banner", "-i", str(src)], capture_output=True).stderr
+    except (OSError, RuntimeError):
+        return {}
+    out = {}
+    for line in err.decode("utf-8", "replace").splitlines():
+        key, sep, value = line.strip().partition(":")
+        if sep and key.strip().lower() in ("title", "artist") and key.strip().lower() not in out:
+            out[key.strip().lower()] = value.strip()
+    return out
+
+
 def duration_ms(wav: Path) -> int:
     import soundfile as sf
 

@@ -210,3 +210,6 @@ Free Bird (studio version, fades out during the solo; the tab writes the full en
 Tail cost: 0.3 does not cut (only the last 5 bars); 0.1, 0.03 and 0 all cut at b236.
 The minimum of 4 dropped bars comes from Audioslave (validation): the chart's last bar is at 350.7 s, past the audio-end threshold (−40 dB, 347.0 s), and without the minimum the DP dropped its last 2 bars (1.7% → 10.7% of bars off).
 Results with the final version: dev (24) and validation v3 (12) identical song by song to no tail cut (2.8% / 22 good and 1.8% / 10 good); MoP the same (10 ms, 0% > 100 ms).
+
+### Tab and audio of different songs (2026-11-08)
+The build warns when the tab's artist and title share no word with the audio's file name and tags, and when the alignment shows signs of a different song: `chroma_match` (mean chroma emission per bar) < 0.025, median tempo ratio outside 0.85–1.18, or more than 50% of bars off-tempo. Calibration (full alignment, 23 right pairs from the benchmark and `samples/`, 10 crossed pairs): right pairs have `chroma_match` 0.033–0.129, ratio 0.95–1.01 and at most 35% of odd bars (Machine Head); the rule warns on all 10 crossed pairs and on none of the right ones. Three more crossed pairs ran out of memory (long audio).
