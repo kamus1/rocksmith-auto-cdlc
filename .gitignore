@@ -5,3 +5,4 @@ samples/
 .venv/
 __pycache__/
 config.json
+docs/NEXT_STEPS.md
