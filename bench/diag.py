@@ -39,7 +39,7 @@ for t_ms, _d, midi, _tr in tl["notes"]:
 beat = np.diff(truth)[:n] / q[:n]
 ec, ef = (C[:n] - truth[:n]) / beat, (T[:n] - truth[:n]) / beat
 bad = (np.abs(ef) > 0.5) & (notes > 0)
-print(f"compases con notas a más de ½ beat: {bad.sum()}/{(notes > 0).sum()}  huecos {res['gaps']}  coste fino con/sin huecos {res['fine_cost_with_gaps']} / {res['fine_cost_without_gaps']}  ganancia etapa intermedia {res.get('refine_gain')}")
+print(f"compases con notas a más de ½ beat: {bad.sum()}/{(notes > 0).sum()}  huecos {res['gaps']}  coste fino con/sin huecos {res['fine_cost_with_gaps']} / {res['fine_cost_without_gaps']}  ganancia etapa intermedia {res.get('refine_gain')} cambio croma {res.get('refine_chroma_change')}")
 show = np.ones(n, bool) if a.todo else np.convolve(bad, np.ones(7), "same") > 0
 for k in range(n):
     if show[k]:

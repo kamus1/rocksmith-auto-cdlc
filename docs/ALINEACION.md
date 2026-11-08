@@ -186,3 +186,20 @@ Medidas de las que salen los umbrales (peso 1000): Yes +25,0 / −0,74 (113 → 
 
 Desarrollo: Yes 43,5 % → 6,3 %, OutKast y Joni Mitchell → 0 %; ninguna empeora. 2 compases quitados: mejoran Yes, Sabaton y Queensrÿche; OutKast 3,2 % → 3,8 % (un compás). Validación nueva (tercer conjunto, `bench/select_new_val.py --seed 23 --prev validación_v2`: Shinedown, All That Remains, Dream Theater, Audioslave, Audrey and Kate, Manic Street Preachers, Testament, Boston, Grateful Dead, Spacehog, Bill Withers, R.E.M.): Manic Street Preachers 10,4 % → 0 %, Dream Theater 6,4 % → 0 %; ninguna empeora. MoP igual (10 ms). **Esta validación ya está usada.**
 Quedan en la validación: Boston (18,9 %), Audioslave (17,5 %), Audrey and Kate (10,6 %); sin mirar todavía.
+
+### Banco corregido: tabs completas (07/11/2026)
+Tres subagentes diagnosticaron Boston, Audioslave y Audrey and Kate y encontraron un error del banco, no del algoritmo. `build_timeline` perdía notas de los charts:
+- los acordes repetidos (`<chord chordId=…/>` sin `<chordNote>`, entre el 30 y el 90 % de los acordes en muchas canciones), que ahora se expanden con su `chordTemplate`;
+- frases enteras, por usar un solo nivel de dificultad (el de más notas); ahora cada frase va en el nivel de su `maxDifficulty` (`full_events`).
+Una tab real de Guitar Pro trae todo eso, así que el banco medía con tabs mucho más pobres que las reales. Ejemplos: Audioslave pasa de 1.496 a 7.149 notas.
+
+| Conjunto (tab completa) | Con etapa intermedia | Sin ella (`refine_weight` 0) |
+|---|---|---|
+| Desarrollo (24) | **2,8 % / 22 bien** | 3,1 % / 21 |
+| Desarrollo, 2 compases quitados | **4,6 % / 21 bien** | 5,0 % / 20 |
+| Validación v3 (12) | **1,8 % / 10 bien** | 4,5 % / 7 |
+| Validación v2 (12) | 2,5 % / 10 bien | 2,5 % / 10 |
+
+Con la tab completa, la etapa intermedia no empeora ninguna canción en ningún conjunto (mejoran Oasis, OutKast, Joni Mitchell, Sabaton, Shinedown, Audioslave, Audrey and Kate, Manic Street Preachers). Frente a la tab incompleta, mejoran Mastodon, Machine Head, Silverstein, Steve Winwood, Joy Division y Queen, y empeoran **Yes (6,3 % → 49,8 %)** y **Disturbed (0 → 10 %)**.
+**Yes y Disturbed:** la etapa intermedia propone la curva buena (aceptándola siempre: Yes 49,8 → 13,2 %, Disturbed 10 → 2 %), pero el criterio la rechaza. Con tabs completas, Yes (+6,33 de ganancia fina, −1,15 de croma) y Queen (+7,72, −1,16; aceptarla la lleva de 3,1 a 53,8 %) quedan en el mismo punto: ningún criterio con esas dos medidas acepta una y rechaza la otra. La forma del cambio tampoco separa (fracción de compases desplazados un beat entero: Queen 53 %, Disturbed 46 %, Yes 17 %, Oasis 12 %), así que no se ajusta nada para no sobreajustar. Con ganancia negativa aceptar siempre empeora (Machine Head, Silverstein, Boston, Spinal Tap). `bench/run.py` guarda ahora `refine_gain` y `refine_chroma_change` por canción.
+Fallos que quedan, según los diagnósticos: la intro de Boston (pedal de La sin ataques y rubato: sin información), los cambios bruscos de tempo con calderones (ninguna etapa admite saltos tan grandes; idea: un salto de coste fijo en `tempo_refine`), y las notas cortas o que se apagan, que pesan mal en la croma (idea: duración mínima en la croma de la tab o atenuar `held`).

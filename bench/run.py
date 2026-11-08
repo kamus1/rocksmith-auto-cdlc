@@ -45,6 +45,46 @@ def max_level(root):
     return max(root.find("levels"), key=lambda l: len(l.find("notes")) + len(l.find("chords")))
 
 
+def full_events(root) -> list:
+    """Notas del chart completo, [(elemento con string/fret/sustain/bendValues, tiempo en ms)], como en una
+    tab de Guitar Pro:
+    - cada frase en el nivel de su maxDifficulty (en los charts oficiales cada frase tiene el suyo; un solo
+      nivel deja frases enteras en versión reducida o vacías, p. ej. la intro de Audioslave);
+    - los acordes repetidos sin <chordNote> (solo chordId) expandidos con su chordTemplate: si no, se
+      perdía entre el 30 y el 90 % de los acordes de muchas canciones."""
+    levels = {int(l.get("difficulty")): l for l in root.find("levels")}
+    tmpl = list(root.find("chordTemplates"))
+    phrases = list(root.find("phrases"))
+    its = list(root.find("phraseIterations"))
+    if not its:
+        chosen = [(max_level(root), -1e18, 1e18)]
+    else:
+        bounds = [float(p.get("time")) for p in its] + [1e18]
+        bounds[0] = -1e18
+        chosen = []
+        for i, pi in enumerate(its):
+            md = int(phrases[int(pi.get("phraseId"))].get("maxDifficulty"))
+            lv = levels.get(md) or levels[max(k for k in levels if k <= md) if any(k <= md for k in levels) else max(levels)]
+            chosen.append((lv, bounds[i], bounds[i + 1]))
+    events = []
+    for lv, a, b in chosen:
+        for n in lv.find("notes"):
+            t = float(n.get("time"))
+            if a <= t < b:
+                events.append((n, t * 1000))
+        for c in lv.find("chords"):
+            t = float(c.get("time"))
+            if not a <= t < b:
+                continue
+            cns = c.findall("chordNote")
+            if not cns:
+                tp = tmpl[int(c.get("chordId"))]
+                cns = [ET.Element("chordNote", {"string": str(i), "fret": tp.get(f"fret{i}"), "sustain": "0"})
+                       for i in range(6) if int(tp.get(f"fret{i}", -1)) >= 0]
+            events += [(cn, t * 1000) for cn in cns]
+    return events
+
+
 def build_timeline(d: Path, drop: int = 0, tag: str = "") -> tuple[Path, np.ndarray]:
     """Tab a tempo fijo desde los XML de referencia. Devuelve (timeline.json, tiempos reales de cada compás).
 
@@ -77,9 +117,7 @@ def build_timeline(d: Path, drop: int = 0, tag: str = "") -> tuple[Path, np.ndar
         tun = rx.find("tuning")
         offs = [int(tun.get(f"string{i}", 0)) for i in range(6)]
         base = BASS if "_bass" in x.stem else GUITAR
-        lv = max_level(rx)
-        events = [(n, float(n.get("time")) * 1000) for n in lv.find("notes")]
-        events += [(cn, float(c.get("time")) * 1000) for c in lv.find("chords") for cn in c.findall("chordNote")]
+        events = full_events(rx)
         for n, t in events:
             if t < beats[0] or t > beats[-1]:
                 continue
@@ -138,7 +176,8 @@ def run_song(song: dict, kwargs: dict, drop: int = 0) -> dict:
         return dict(song=f"{song['artist']} - {song['title']}", set=song["set"], group=song.get("group", ""),
                     bars=int(n), median=float(np.median(a)), p90=float(np.percentile(a, 90)),
                     over50=float(np.mean(a > 50)), over_half_beat=float(np.mean(a > beat / 2)),
-                    bias=float(np.median(err)), gaps=res.get("gaps", []), seconds=round(time.time() - t0))
+                    bias=float(np.median(err)), gaps=res.get("gaps", []), seconds=round(time.time() - t0),
+                    refine_gain=res.get("refine_gain"), refine_chroma_change=res.get("refine_chroma_change"))
     except Exception as e:  # noqa: BLE001 — una canción rota no debe parar el banco
         return dict(song=f"{song['artist']} - {song['title']}", set=song["set"], error=repr(e)[:200])
 
