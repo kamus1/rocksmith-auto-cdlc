@@ -153,6 +153,18 @@
       <div><button class="btn" id="btn-tones">Re-extract tones from installed CDLC</button></div>
       <pre id="tones-log" class="terminal" hidden></pre>
     </div>
+
+    <details class="advanced">
+      <summary>Advanced</summary>
+      <div class="inline-form">
+        <label for="cfg-encoder" class="small muted">Audio encoder</label>
+        <select id="cfg-encoder">
+          <option value="auto">Built-in (recommended)</option>
+          <option value="wwise">Wwise (must be installed)</option>
+        </select>
+        <span class="small" id="cfg-encoder-msg"></span>
+      </div>
+    </details>
   </section>
 </main>
 

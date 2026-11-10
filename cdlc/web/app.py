@@ -1,7 +1,7 @@
 """Local web UI for the generator: python -m cdlc web (listens on 127.0.0.1 only).
 
 Endpoints (see docs/WEB_PLAN.md): tab inspection, background build with SSE progress,
-generated songs, tones and environment status. One job at a time (Wwise and memory).
+generated songs, tones and environment status. One job at a time (memory).
 """
 
 import asyncio
@@ -307,7 +307,7 @@ def status():
 @app.get("/api/config")
 def get_config():
     return {"dlc_dir": str(dlc_dir()), "default_dlc_dir": str(pipeline.DEFAULT_DLC_DIR),
-            "dlc_dir_ok": dlc_dir().is_dir()}
+            "dlc_dir_ok": dlc_dir().is_dir(), "encoder": pipeline.configured_encoder()}
 
 
 @app.post("/api/config")
@@ -319,6 +319,17 @@ def set_config(dlc_dir_path: str = Form(..., alias="dlc_dir")):
     if path and not (Path(path).name.lower() == "dlc" or any(Path(path).glob("*.psarc"))):
         raise HTTPException(400, "This does not look like the Rocksmith 2014 dlc/ folder (it is not named dlc and has no .psarc files).")
     pipeline.save_config(dlc_dir=path or None)
+    return get_config()
+
+
+@app.post("/api/config/encoder")
+def set_encoder(encoder: str = Form(...)):
+    """Advanced: .wem encoder for new builds (auto = built-in if available, else Wwise)."""
+    if encoder not in pipeline.ENCODERS:
+        raise HTTPException(400, f"Unknown encoder: {encoder}")
+    if encoder == "wwise" and pipeline.find_wwise() is None:
+        raise HTTPException(400, "Wwise 2019–2023 is not installed (Authoring package, from the Audiokinetic Launcher).")
+    pipeline.save_config(encoder=None if encoder == "auto" else encoder)
     return get_config()
 
 

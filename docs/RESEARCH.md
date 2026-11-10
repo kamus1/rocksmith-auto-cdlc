@@ -1,6 +1,6 @@
 # Research: Rocksmith CDLC
 
-Notes from 2026-10-22, before the project started: what CDLC are, how they are made by hand and how the process could be automated.
+Notes from 2026-10-22, before the project started: what CDLC are, how they are made by hand and how the process could be automated. Section 4 (related projects) was added on 2026-11-09.
 
 ## 1. What a CDLC is
 
@@ -52,7 +52,7 @@ Community advice: learn to write and fix tabs before diving in.
 ## 3. Automation
 
 ### State of the art
-- **There is no automatic CDLC generator** from audio. None was found.
+- **There is no automatic CDLC generator** from audio. None was found on 2026-10-22. Similar projects found later: [section 4](#4-related-projects).
 - **Packaging can be scripted.** [Rocksmith2014.NET](https://github.com/iminashi/Rocksmith2014.NET) is the engine behind DLC Builder: F# (with some C#), MIT license and active (last push on 2026-10-12). Relevant modules in `src/`:
   - `Rocksmith2014.XML` / `.XML.Processing`: read, write and validate arrangements. Also on [NuGet](https://www.nuget.org/packages/Rocksmith2014.XML).
   - `Rocksmith2014.DD`: dynamic difficulty generator.
@@ -100,7 +100,13 @@ Audio + Guitar Pro tab
 - The final test in the game is manual.
 - You must use your own audio. Scraping tabs from Songsterr is not advisable because its terms of use forbid it.
 
-## 4. Sources
+## 4. Related projects
+
+- [Ynzie/RS-Studio](https://github.com/Ynzie/RS-Studio): Guitar Pro 7/8 → `.psarc` (Lead, Rhythm, Bass, lyrics). Timing comes from the tab's tempo map plus a manual offset and BPM scale.
+- [got-feedBack/feedBack](https://github.com/got-feedBack/feedBack): Rocksmith-style player and editor. `lib/gp_autosync.py` aligns a GP tab to the audio with chroma DTW.
+- [jweter/rocksmith-cdlc-generator](https://github.com/jweter/rocksmith-cdlc-generator): audio analysis and transcription, optional MIDI/GP/MusicXML import, hand-off to DLC Builder. Bass only for now.
+
+## 5. Sources
 
 **Manual process (CustomsForge):**
 - [Which software to use for creating CDLC](https://www.editoronfire.customsforge.com/kb/article/Charting/which-software-to-use)

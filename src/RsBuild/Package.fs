@@ -64,13 +64,30 @@ let buildFromProject (projectPath: string) (outBase: string) =
         return outBase + "_p.psarc"
     }
 
-/// Creates the preview (28 s from previewStartMs) and converts song and preview to .wem with Wwise.
-let convertAudio (wav: string) (previewStartMs: float) =
+/// Runs an external wav → wem command: the command line, then the .wav and .wem paths as arguments.
+let private runWemCommand (command: string) (wav: string) (wem: string) =
+    let parts = command.Split(' ', StringSplitOptions.RemoveEmptyEntries)
+    let psi = Diagnostics.ProcessStartInfo(parts[0], RedirectStandardError = true, UseShellExecute = false)
+    for a in Array.append parts[1..] [| wav; wem |] do psi.ArgumentList.Add a
+    use p = Diagnostics.Process.Start psi
+    let err = p.StandardError.ReadToEnd()
+    p.WaitForExit()
+    if p.ExitCode <> 0 || not (File.Exists wem) then
+        failwith $"wem conversion failed ({command}): {err}"
+
+/// Creates the preview (28 s from previewStartMs) and converts song and preview to .wem:
+/// with Wwise or, if wemCommand is given, with that command (e.g. external/wem-encoder/wav2wem.py).
+let convertAudio (wav: string) (previewStartMs: float) (wemCommand: string option) =
     let previewWav = Path.Combine(Path.GetDirectoryName wav, Path.GetFileNameWithoutExtension wav + "_preview.wav")
     Preview.create wav previewWav (TimeSpan.FromMilliseconds previewStartMs)
     for f in [ wav; previewWav ] do
-        printfn "Wwise: %s" (Path.GetFileName f)
-        Wwise.convertToWem None f |> Async.RunSynchronously
+        match wemCommand with
+        | Some cmd ->
+            printfn "wem (built-in encoder): %s" (Path.GetFileName f)
+            runWemCommand cmd f (Path.ChangeExtension(f, "wem"))
+        | None ->
+            printfn "Wwise: %s" (Path.GetFileName f)
+            Wwise.convertToWem None f |> Async.RunSynchronously |> ignore
     previewWav
 
 let private sortable (s: string) =

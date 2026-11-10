@@ -46,7 +46,7 @@ function showView(name) {
 }
 
 // ------------------------------------------------------------------ environment status
-const CHECK_NAMES = { wwise: "Wwise", ffmpeg: "ffmpeg", dotnet: ".NET", rsbuild: "RsBuild", dlc: "Game folder", tones: "Tones" };
+const CHECK_NAMES = { encoder: ".wem encoder", wwise: "Wwise", ffmpeg: "ffmpeg", dotnet: ".NET", rsbuild: "RsBuild", dlc: "Game folder", tones: "Tones" };
 async function loadStatus() {
   const s = await api("/api/status");
   const missing = s.checks.filter((c) => !c.ok && c.key !== "tones" && c.key !== "rsbuild");
@@ -62,6 +62,7 @@ async function loadSettings() {
   const [s, t, cfg] = await Promise.all([loadStatus(), api("/api/tones"), api("/api/config")]);
   $("#cfg-dlc").value = cfg.dlc_dir;
   $("#cfg-default").dataset.path = cfg.default_dlc_dir;
+  $("#cfg-encoder").value = cfg.encoder === "wwise" ? "wwise" : "auto";
   $("#checks").replaceChildren(...s.checks.map((c) => el("li", {},
     el("span", { class: "dot " + (c.ok ? "ok" : "err"), style: "margin-top:6px" }),
     el("span", { class: "k" }, CHECK_NAMES[c.key] || c.key),
@@ -82,6 +83,15 @@ async function saveDlcDir(path) {
   } catch (e) { msg.className = "small err"; msg.textContent = e.message; }
 }
 $("#cfg-save").addEventListener("click", () => saveDlcDir($("#cfg-dlc").value));
+$("#cfg-encoder").addEventListener("change", async (e) => {
+  const msg = $("#cfg-encoder-msg");
+  const fd = new FormData(); fd.append("encoder", e.target.value);
+  try {
+    const cfg = await api("/api/config/encoder", { method: "POST", body: fd });
+    e.target.value = cfg.encoder === "wwise" ? "wwise" : "auto";
+    msg.className = "small ok"; msg.textContent = "Saved.";
+  } catch (err) { e.target.value = "auto"; msg.className = "small err"; msg.textContent = err.message; }
+});
 $("#cfg-default").addEventListener("click", () => saveDlcDir(""));
 
 $("#btn-tones").addEventListener("click", async () => {
@@ -253,7 +263,7 @@ $("#btn-build").addEventListener("click", async () => {
 
 // ------------------------------------------------------------------ progress
 const STEP_NAMES = ["Tracks and song data", "Audio → WAV", "Tab timeline",
-  "Tab ↔ audio alignment", "XML, tones, Wwise audio and packaging", "Copy to the game"];
+  "Tab ↔ audio alignment", "XML, tones, audio and packaging", "Copy to the game"];
 let elapsedTimer;
 
 function resetProgress() {

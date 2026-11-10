@@ -10,6 +10,7 @@ import os
 import re
 import shutil
 import subprocess
+import sys
 import unicodedata
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -20,7 +21,11 @@ from . import align, audio
 ROOT = Path(__file__).resolve().parent.parent
 RSBUILD = ROOT / "src" / "RsBuild" / "bin" / "Release" / "net10.0" / "RsBuild.dll"
 DOTNET = shutil.which("dotnet") or r"C:\Program Files\dotnet\dotnet.exe"
-DEFAULT_DLC_DIR = Path(r"C:\Program Files (x86)\Steam\steamapps\common\Rocksmith2014\dlc")
+DEFAULT_DLC_DIR = (Path(r"C:\Program Files (x86)\Steam\steamapps\common\Rocksmith2014\dlc") if os.name == "nt"
+                   else Path.home() / ".local" / "share" / "Steam" / "steamapps" / "common" / "Rocksmith2014" / "dlc")
+WEM_DIR = ROOT / "external" / "wem-encoder"          # built-in .wem encoder, no Wwise (submodule)
+WAV2WEM = WEM_DIR / "wav2wem.py"
+WEM_ENCODER = WEM_DIR / "build" / ("encode.exe" if os.name == "nt" else "encode")
 CONFIG_PATH = ROOT / "config.json"                  # user settings (not in git)
 
 
@@ -35,6 +40,15 @@ def save_config(**changes) -> dict:
     cfg = {**load_config(), **changes}
     CONFIG_PATH.write_text(json.dumps(cfg, indent=1, ensure_ascii=False), encoding="utf-8")
     return cfg
+
+
+ENCODERS = ("auto", "builtin", "wwise")
+
+
+def configured_encoder() -> str:
+    """.wem encoder chosen in Settings (config.json); auto if none."""
+    e = load_config().get("encoder")
+    return e if e in ENCODERS else "auto"
 
 
 def dlc_dir() -> Path:
@@ -60,7 +74,9 @@ def find_wwise() -> str | None:
     if env and SUPPORTED_WWISE.search(env) and Path(env).is_dir():
         return env
     pattern = "WwiseConsole.exe"
-    roots = [r"C:\Audiokinetic", r"C:\Program Files (x86)\Audiokinetic", r"C:\Program Files\Audiokinetic"]
+    roots = ([r"C:\Audiokinetic", r"C:\Program Files (x86)\Audiokinetic", r"C:\Program Files\Audiokinetic"] if os.name == "nt"
+             # Linux: Rocksmith2014.NET runs WwiseConsole.exe with wine from this folder only
+             else [str(Path.home() / ".wine" / "drive_c" / "Program Files (x86)" / "Audiokinetic")])
     for root in roots:
         for d in sorted(glob.glob(os.path.join(root, "*")), reverse=True):
             if SUPPORTED_WWISE.search(os.path.basename(d)) and \
@@ -77,15 +93,29 @@ def tone_count() -> int:
         return 0
 
 
+def builtin_encoder() -> str | None:
+    """The built-in encoder binary, or how it will be obtained; None if it cannot be used here."""
+    if WEM_ENCODER.exists():
+        return str(WEM_ENCODER)
+    if os.name != "nt" and shutil.which("cc") and shutil.which("make"):
+        return "built on first use (external/wem-encoder/build.sh)"
+    return None
+
+
 def environment_checks() -> list[tuple[str, str | None, str, bool]]:
     """(key, value found or None, how to fix it, required) for each thing the build needs."""
     ffmpeg = shutil.which("ffmpeg") or shutil.which("ffmpeg", path=str(WINGET_LINKS))
     dotnet = shutil.which("dotnet") or (DOTNET if Path(DOTNET).exists() else None)
     tones = tone_count()
     return [
+        ("encoder", builtin_encoder(),
+         "Built-in .wem encoder: on Linux it is built automatically (needs a C compiler, make and libogg); "
+         "on Windows put encode.exe in external/wem-encoder/build/ (cross-compiled on Linux with "
+         "\"sh external/wem-encoder/build.sh --windows\"). "
+         "Without it, Wwise is used if installed.", find_wwise() is None),
         ("wwise", find_wwise(),
-         "Wwise 2019–2023, Authoring package (2024 or later does not work). Install it with the "
-         "Audiokinetic Launcher (free account).", True),
+         "Wwise 2019–2023, Authoring package (2024 or later does not work), only needed without the built-in "
+         "encoder or with --encoder wwise. Install it with the Audiokinetic Launcher (free account).", False),
         ("ffmpeg", ffmpeg, "winget install Gyan.FFmpeg", True),
         ("dotnet", dotnet, ".NET 10 SDK: winget install Microsoft.DotNet.SDK.10", True),
         ("rsbuild", str(RSBUILD) if RSBUILD.exists() else None,
@@ -433,6 +463,8 @@ class BuildOptions:
     pad: float = 4.0                    # seconds of silence at the start (count-in)
     deploy: bool = True
     lookup: bool = True                 # album, year and cover from iTunes
+    encoder: str | None = None          # .wem encoder: builtin (no Wwise), wwise, auto (builtin if available,
+                                        # else Wwise); None: the one in Settings
 
 
 @dataclass
@@ -454,9 +486,17 @@ def build_song(opts: BuildOptions, on_step: Callable[[int, str], None] = lambda 
     """Generates the CDLC. on_step(n, title) marks the start of each step (0..STEPS); on_log, each detail line."""
     if WINGET_LINKS.is_dir() and str(WINGET_LINKS) not in os.environ["PATH"]:
         os.environ["PATH"] = os.environ["PATH"] + os.pathsep + str(WINGET_LINKS)
-    wwise = find_wwise()
-    if wwise is None:
-        raise PipelineError("Wwise 2019–2023 not found. Install it from the Wwise Launcher (Authoring package).")
+    encoder = opts.encoder or configured_encoder()
+    use_builtin = encoder == "builtin" or (encoder == "auto" and builtin_encoder() is not None)
+    wwise = None if use_builtin else find_wwise()
+    if use_builtin and builtin_encoder() is None:
+        raise PipelineError(f"Built-in encoder not found ({WEM_ENCODER}). Cross-compile it on Linux with "
+                            "\"sh external/wem-encoder/build.sh --windows\" and copy it there, or use --encoder wwise.")
+    if encoder == "wwise" and wwise is None:
+        raise PipelineError("Wwise 2019–2023 not found. Install it from the Audiokinetic Launcher (Authoring package).")
+    if not use_builtin and wwise is None:
+        raise PipelineError("No .wem encoder: the built-in one is not available and Wwise 2019–2023 was not found. "
+                            "Install Wwise from the Audiokinetic Launcher (Authoring package).")
 
     audio_in = Path(opts.audio).resolve()
     tab = Path(opts.tab).resolve()
@@ -559,7 +599,7 @@ def build_song(opts: BuildOptions, on_step: Callable[[int, str], None] = lambda 
             tone_lines += [f"{kind.capitalize()}, {c}: {desc}" for c, (_path, desc) in chosen.items()]
     if per_track_tones:
         tone_desc += "; with tone changes: " + "; ".join(tone_lines)
-    on_step(4, f"XML, Wwise audio and packaging — tone: {tone_desc}")
+    on_step(4, f"XML, audio and packaging — tone: {tone_desc}")
     args = ["build", "--tab", str(tab), "--lead", str(lead), "--bar-times", str(out / "bar_times.json"),
             "--wav", str(wav), "--out-dir", str(out / "pkg")]
     if rhythm is not None:
@@ -576,7 +616,12 @@ def build_song(opts: BuildOptions, on_step: Callable[[int, str], None] = lambda 
         args += ["--variant", opts.variant]
     for kind, chosen in per_track_tones.items():
         args += [f"--tones-{kind}", "|".join(f"{c}={p}" for c, p in chosen.items())]
-    log = rsbuild(*args, env=dict(os.environ, WWISEROOT=wwise))
+    if use_builtin:                                  # built-in encoder, no Wwise (external/wem-encoder)
+        on_log("Audio → .wem with the built-in encoder")
+        args += ["--wem-cmd", f"{sys.executable} {WAV2WEM}"]
+    else:
+        on_log("Audio → .wem with Wwise")
+    log = rsbuild(*args, env=dict(os.environ, WWISEROOT=wwise) if wwise else None)
     log_lines(log)
     m = re.search(r"PSARC:\s+(.+)", log)
     if not m:

@@ -11,7 +11,9 @@ Turns a song's audio and a Guitar Pro tab into a Rocksmith 2014 CDLC (`.psarc`) 
 - Python 3.12 (`winget install Python.Python.3.12`)
 - .NET 10 SDK (`winget install Microsoft.DotNet.SDK.10`)
 - ffmpeg (`winget install Gyan.FFmpeg`)
-- Wwise 2023.1, Authoring package: install it with the [Audiokinetic Launcher](https://www.audiokinetic.com/download/) (free account). 2024+ does not work.
+- The `.wem` audio is made by [wem-encoder](https://github.com/kamus1/wem-encoder) (submodule in `external/`), not Wwise.
+  - On Windows it needs `external\wem-encoder\build\encode.exe`, cross-compiled on Linux with `sh external/wem-encoder/build.sh --windows`.
+  - Without it, Wwise 2023.1 (Authoring package, from the [Audiokinetic Launcher](https://www.audiokinetic.com/download/); 2024+ does not work) is used instead. `--encoder wwise` forces Wwise.
 
 ## Install
 
@@ -61,7 +63,7 @@ Without this library a default tone is used. To pick one yourself: `--tone disto
 
 - Use audio you own.
 - Not affiliated with Ubisoft.
-- How the alignment works: [docs/ALIGNMENT.md](docs/ALIGNMENT.md). Background research: [docs/RESEARCH.md](docs/RESEARCH.md).
+- How the alignment works: [docs/ALIGNMENT.md](docs/ALIGNMENT.md). Background research: [docs/RESEARCH.md](docs/RESEARCH.md). Similar projects and how they differ: [docs/RESEARCH.md § 4](docs/RESEARCH.md#4-related-projects).
 
 ## Credits
 

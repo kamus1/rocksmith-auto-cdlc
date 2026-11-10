@@ -1,3 +1,6 @@
 [submodule "external/Rocksmith2014.NET"]
 	path = external/Rocksmith2014.NET
 	url = https://github.com/iminashi/Rocksmith2014.NET
+[submodule "external/wem-encoder"]
+	path = external/wem-encoder
+	url = https://github.com/kamus1/wem-encoder

@@ -23,7 +23,8 @@ def cmd_build(a: argparse.Namespace) -> None:
     opts = pipeline.BuildOptions(
         audio=Path(a.audio), tab=Path(a.tab), lead=a.lead, rhythm=a.rhythm, no_rhythm=a.no_rhythm,
         artist=a.artist, title=a.title, album=a.album, year=a.year, cover=a.cover, tone=a.tone,
-        name=a.name, variant=a.variant, pad=a.pad, deploy=not a.no_deploy, lookup=not a.no_lookup)
+        name=a.name, variant=a.variant, pad=a.pad, deploy=not a.no_deploy, lookup=not a.no_lookup,
+        encoder=a.encoder)
     pipeline.build_song(opts, on_step=lambda n, title: print(f"[{n}/{pipeline.STEPS}] {title}", flush=True),
                         on_log=lambda line: print(f"      {line}", flush=True))
 
@@ -59,7 +60,7 @@ def cmd_web(a: argparse.Namespace) -> None:
     print(f"Local web app at {url} (Ctrl+C to quit)")
     if not a.no_browser:
         threading.Timer(1.5, webbrowser.open, [url]).start()
-    # Localhost only: it needs Wwise and this PC's dlc/ folder, and must not be exposed to the network
+    # Localhost only: it uses this PC's tools and dlc/ folder, and must not be exposed to the network
     uvicorn.run("cdlc.web.app:app", host="127.0.0.1", port=a.port, log_level="warning")
 
 
@@ -88,6 +89,9 @@ def main(argv: list[str] | None = None) -> None:
     b.add_argument("--pad", type=float, default=4.0, help="seconds of silence at the start (count-in)")
     b.add_argument("--no-deploy", action="store_true", help="do not copy to the game's dlc folder")
     b.add_argument("--no-lookup", action="store_true", help="do not look up album, year and cover on iTunes")
+    b.add_argument("--encoder", choices=list(pipeline.ENCODERS),
+                   help=".wem encoder: the built-in one (no Wwise) or Wwise; auto: built-in if available, else Wwise "
+                        "(default: the one in the web app's Settings, auto if none)")
     b.set_defaults(func=cmd_build)
 
     t = sub.add_parser("tones", help="extract the tone library from the installed CDLC")
