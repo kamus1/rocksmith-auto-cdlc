@@ -61,7 +61,7 @@ Without this library a default tone is used. To pick one yourself: `--tone disto
 
 - Use audio you own.
 - Not affiliated with Ubisoft.
-- How the alignment works: [docs/ALIGNMENT.md](docs/ALIGNMENT.md). Background research: [docs/RESEARCH.md](docs/RESEARCH.md).
+- How the alignment works: [docs/ALIGNMENT.md](docs/ALIGNMENT.md). Background research: [docs/RESEARCH.md](docs/RESEARCH.md). Similar projects and how they differ: [docs/RESEARCH.md § 4](docs/RESEARCH.md#4-related-projects).
 
 ## Credits
 
