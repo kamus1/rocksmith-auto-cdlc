@@ -65,6 +65,7 @@ let private usage () =
     eprintfn "                [--variant V]   (variant: goes in the title and key, coexists with the normal version)"
     eprintfn "  RsBuild tones <dlc_folder> <out_dir>     (extracts guitar tones from the .psarc files)"
     eprintfn "  RsBuild pack <project.rs2dlc> <out_without_extension>"
+    eprintfn "  RsBuild unpack <file.psarc> <out_dir>      (extracts all files and lists them)"
     2
 
 [<EntryPoint>]
@@ -94,6 +95,12 @@ let main argv =
         let psarcs = Directory.EnumerateFiles(Path.GetFullPath dlcDir, "*_p.psarc", SearchOption.AllDirectories)
         let entries = Tones.extract psarcs (Path.GetFullPath outDir)
         printfn "%d tones extracted to %s" entries.Count outDir
+        0
+    | [| "unpack"; psarcPath; outDir |] ->
+        use psarc = Rocksmith2014.PSARC.PSARC.OpenFile(Path.GetFullPath psarcPath)
+        psarc.ExtractFiles(Path.GetFullPath outDir).GetAwaiter().GetResult()
+        for name in psarc.Manifest do
+            printfn "%10d  %s" (FileInfo(Path.Combine(outDir, name)).Length) name
         0
     | [| "pack"; project; outBase |] ->
         let psarc = (Package.buildFromProject (Path.GetFullPath project) (Path.GetFullPath outBase)).GetAwaiter().GetResult()
