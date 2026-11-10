@@ -46,7 +46,7 @@ function showView(name) {
 }
 
 // ------------------------------------------------------------------ environment status
-const CHECK_NAMES = { wwise: "Wwise", ffmpeg: "ffmpeg", dotnet: ".NET", rsbuild: "RsBuild", dlc: "Game folder", tones: "Tones" };
+const CHECK_NAMES = { encoder: ".wem encoder", wwise: "Wwise", ffmpeg: "ffmpeg", dotnet: ".NET", rsbuild: "RsBuild", dlc: "Game folder", tones: "Tones" };
 async function loadStatus() {
   const s = await api("/api/status");
   const missing = s.checks.filter((c) => !c.ok && c.key !== "tones" && c.key !== "rsbuild");
@@ -253,7 +253,7 @@ $("#btn-build").addEventListener("click", async () => {
 
 // ------------------------------------------------------------------ progress
 const STEP_NAMES = ["Tracks and song data", "Audio → WAV", "Tab timeline",
-  "Tab ↔ audio alignment", "XML, tones, Wwise audio and packaging", "Copy to the game"];
+  "Tab ↔ audio alignment", "XML, tones, audio and packaging", "Copy to the game"];
 let elapsedTimer;
 
 function resetProgress() {

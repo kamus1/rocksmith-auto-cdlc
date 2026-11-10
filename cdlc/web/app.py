@@ -1,7 +1,7 @@
 """Local web UI for the generator: python -m cdlc web (listens on 127.0.0.1 only).
 
 Endpoints (see docs/WEB_PLAN.md): tab inspection, background build with SSE progress,
-generated songs, tones and environment status. One job at a time (Wwise and memory).
+generated songs, tones and environment status. One job at a time (memory).
 """
 
 import asyncio
