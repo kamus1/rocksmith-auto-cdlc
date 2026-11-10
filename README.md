@@ -42,6 +42,11 @@ Command line:
 
 Then go back to the game's title screen to load the new song.
 
+**Guitar Pro 8 tabs with an audio track and sync points:**
+- With `--audio` left out, the tab's own audio is used.
+- With `--audio`, the sync points are used when that audio is the same recording as the tab's. Otherwise the tab is aligned as usual.
+- `--timing sync-points` or `--timing align` forces one or the other.
+
 The game folder defaults to Steam's `Rocksmith2014/dlc`. Change it in the web app's Settings.
 
 ## Tones

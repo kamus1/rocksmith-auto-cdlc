@@ -687,3 +687,132 @@ def align_hybrid(timeline_json: Path, wav: Path, out_json: Path, radius_beats: f
     }
     out_json.write_text(json.dumps(result, indent=1), encoding="utf-8")
     return result
+
+
+# ---------------------------------------------------------------- Guitar Pro 8 sync points
+
+def bar_times_from_sync_points(timeline_json: Path, wav: Path, out_json: Path, offset_ms: float) -> dict:
+    """Bar times from the tab's GP8 sync points instead of aligning: each point fixes the instant of a
+    position in a bar (in the embedded audio; offset_ms moves it to wav's time axis). Between two points
+    the time is interpolated in proportion to the written duration (quarters), as GP plays them: one
+    tempo per stretch. Before the first and after the last point, the nearest stretch's ratio to the
+    written tempo carries on (the written tempo if there is a single point).
+    Writes the same bar_times.json as align_hybrid (method "sync_points")."""
+    import librosa
+
+    tl = json.loads(timeline_json.read_text(encoding="utf-8"))
+    st = np.array(tl["bar_starts_ms"], dtype=float)
+    q = np.concatenate([[0.0], np.cumsum(tl["bar_quarters"])])          # written position of each bar start
+    pts = sorted(tl.get("sync_points") or [], key=lambda p: p[0] + p[1])
+    if not pts:
+        raise ValueError("the timeline has no sync points")
+    n = len(st) - 1
+    pq = np.array([q[int(k)] + pos * (q[int(k) + 1] - q[int(k)]) for k, pos, _ in pts])
+    pms = np.array([ms for _, _, ms in pts], dtype=float) + offset_ms
+    pnom = np.interp(pq, q, st)                                         # written time (ms) of each point
+    T = np.interp(q, pq, pms)
+    if len(pts) >= 2:
+        first = (pms[1] - pms[0]) / max(pnom[1] - pnom[0], 1e-9)
+        last = (pms[-1] - pms[-2]) / max(pnom[-1] - pnom[-2], 1e-9)
+    else:
+        first = last = 1.0
+    T = np.where(q < pq[0], pms[0] - (pnom[0] - st) * first, T)
+    T = np.where(q > pq[-1], pms[-1] + (st - pnom[-1]) * last, T)
+
+    y, _ = librosa.load(str(wav), sr=SR, mono=True)
+    audio_ms = len(y) / SR * 1000
+    past_end = [k for k in range(n) if T[k] >= audio_ms]
+    cut = past_end[0] if past_end else None
+    ratio = np.diff(T)[:cut] / np.diff(st)[:cut]
+    result = {
+        "bar_times_ms": [round(float(t), 1) for t in T],
+        "bar_ends_ms": [round(float(t), 1) for t in T[1:]],
+        "coarse_bar_times_ms": [round(float(t), 1) for t in T],
+        "tempo_ratio_median": round(float(np.median(ratio)), 4),
+        # The times come from the tab's author: tempo changes are intended, not alignment errors
+        "suspicious_bars": [],
+        "method": "sync_points",
+        "sync_point_count": len(pts),
+        "sync_offset_ms": round(float(offset_ms), 1),
+        "count_in_bars": 0,
+        "gaps": [],
+        "tail_cut_bar": None if cut is None else int(cut + 1),
+        "mean_abs_offset_ms": 0.0,
+        "chroma_match": round(chroma_curve_score(tl, y, T, bars=cut, mean=True), 3),
+    }
+    out_json.write_text(json.dumps(result, indent=1), encoding="utf-8")
+    return result
+
+
+def _onset_env(path: Path, hop_s: float = 0.01) -> np.ndarray:
+    """Onset strength envelope (one value per hop_s), zero mean and unit variance."""
+    import librosa
+
+    y, _ = librosa.load(str(path), sr=SR, mono=True)
+    hop = int(round(hop_s * SR))
+    e = librosa.onset.onset_strength(y=y, sr=SR, hop_length=hop)
+    return (e - e.mean()) / (e.std() + 1e-9)
+
+
+def _best_lag(a: np.ndarray, b: np.ndarray, lags: range) -> tuple[int, float]:
+    """Lag (b shifted by lag frames matches a) with the highest Pearson correlation over the overlap."""
+    best = (0, -1.0)
+    for lag in lags:
+        a0, b0 = max(0, lag), max(0, -lag)
+        m = min(len(a) - a0, len(b) - b0)
+        if m < 200:
+            continue
+        x, z = a[a0:a0 + m], b[b0:b0 + m]
+        r = float(np.dot(x - x.mean(), z - z.mean()) / (m * x.std() * z.std() + 1e-9))
+        if r > best[1]:
+            best = (lag, r)
+    return best
+
+
+def audio_offset(ref: Path, wav: Path, window_s: float = 30.0, hop_s: float = 0.01) -> dict:
+    """Whether wav holds the same recording as ref (the tab's embedded audio) and where: offset_ms is the
+    instant in wav of ref's start. Found by cross-correlating onset envelopes, first over the whole
+    files, then separately on a window at ref's start and one at its end. Same recording: both windows
+    correlate well and agree on the offset (drift_ms ≈ 0; a different tempo or edit makes them drift)."""
+    from scipy.signal import correlate
+
+    a, b = _onset_env(wav, hop_s), _onset_env(ref, hop_s)
+    c = correlate(a, b, mode="full", method="fft")
+    lag0 = int(np.argmax(c)) - (len(b) - 1)
+    w = int(window_s / hop_s)
+    span = int(2 / hop_s)
+    found = []
+    for start in (0, max(0, len(b) - w)):
+        lag, r = _best_lag(a, b[start:start + w], range(lag0 + start - span, lag0 + start + span + 1))
+        found.append((lag - start, r))           # lag of ref's start, not of the window's
+    (l1, r1), (l2, r2) = found
+    drift_ms = (l2 - l1) * hop_s * 1000
+    corr = min(r1, r2)
+    same = corr >= 0.3 and abs(drift_ms) <= 60
+    offset_ms = l1 * hop_s * 1000
+    if same:
+        offset_ms = _refine_offset(ref, wav, offset_ms, search_ms=2 * hop_s * 1000)
+    return {"offset_ms": round(offset_ms, 1), "drift_ms": round(drift_ms, 1), "correlation": round(corr, 3),
+            "same_recording": same}
+
+
+def _refine_offset(ref: Path, wav: Path, offset_ms: float, search_ms: float, seg_s: float = 10.0) -> float:
+    """Sample-accurate offset: cross-correlates the waveforms (the loudest seg_s of ref against wav) within
+    ±search_ms of offset_ms. The onset envelopes only give it to one hop."""
+    import librosa
+    from scipy.signal import correlate
+
+    yr, _ = librosa.load(str(ref), sr=SR, mono=True)
+    yw, _ = librosa.load(str(wav), sr=SR, mono=True)
+    n = int(seg_s * SR)
+    if len(yr) <= n:
+        return offset_ms
+    energy = np.convolve(yr ** 2, np.ones(SR), mode="valid")[: len(yr) - n]
+    s0 = int(np.argmax(energy[::SR // 10]) * (SR // 10))       # start of the loudest segment (100 ms steps)
+    seg = yr[s0:s0 + n]
+    pad = int(search_ms / 1000 * SR)
+    w0 = s0 + int(round(offset_ms / 1000 * SR)) - pad
+    if w0 < 0 or w0 + n + 2 * pad > len(yw):
+        return offset_ms
+    c = correlate(yw[w0:w0 + n + 2 * pad], seg, mode="valid", method="fft")
+    return (w0 + int(np.argmax(c)) - s0) / SR * 1000

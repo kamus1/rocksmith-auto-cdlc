@@ -213,3 +213,33 @@ Results with the final version: dev (24) and validation v3 (12) identical song b
 
 ### Tab and audio of different songs (2026-11-08)
 The build warns when the tab's artist and title share no word with the audio's file name and tags, and when the alignment shows signs of a different song: `chroma_match` (mean chroma emission per bar) < 0.025, median tempo ratio outside 0.85–1.18, or more than 50% of bars off-tempo. Calibration (full alignment, 23 right pairs from the benchmark and `samples/`, 10 crossed pairs): right pairs have `chroma_match` 0.033–0.129, ratio 0.95–1.01 and at most 35% of odd bars (Machine Head); the rule warns on all 10 crossed pairs and on none of the right ones. Three more crossed pairs ran out of memory (long audio).
+
+## Guitar Pro 8 sync points (2026-11-10)
+
+A GP8 tab can carry its own audio track and sync points: a bar (and its repeat pass) mapped to a millisecond of that audio. When a tab has them, the bar times come from the points instead of `align_hybrid` (`align.bar_times_from_sync_points`):
+- **Between two points:** time is interpolated in proportion to the written duration (quarters). This is how GP plays them, with one tempo per stretch.
+- **Before the first and after the last point:** the nearest stretch's ratio to the written tempo carries on.
+- **alphaTab 1.8.4** gives the points already in milliseconds of the audio file, with GP's `FramePadding` already subtracted (`GpifParser`). `RsBuild timeline` writes them as `sync_points` in playback order.
+
+The points refer to the embedded audio, so the pipeline (`--timing auto`) uses them in two cases:
+- **No `--audio` given:** the embedded audio is used, and the offset is just the leading silence.
+- **`--audio` given:** the points are used only if that audio is the same recording as the tab's (`align.audio_offset`).
+  - It cross-correlates onset envelopes on a window at the start of the tab's audio and one at its end.
+  - Same recording means Pearson correlation ≥ 0.3 on both windows and a drift between them of ≤ 60 ms.
+  - The offset is then refined to the sample by waveform cross-correlation.
+  - Anything else falls back to `align_hybrid`.
+
+Checked on alphaTab's `syncpoints-testfile.gp` (12 bars, a repeat, tempo changes, 9 points):
+
+| Check | Result |
+|---|---|
+| Notes in the built arrangement | Exactly at the points' times |
+| Same audio, with 4 s of silence added | Recognized, offset exactly 4000 ms (correlation 0.96) |
+| Same audio, 1.5 s trimmed and re-encoded to MP3 | Recognized, offset exactly 2500 ms (correlation 0.94) |
+| Same audio, 2 % faster | Rejected: drift −470 ms, correlation 0.12 |
+| Another song | Rejected: correlation 0.18 |
+| `align_hybrid` on the same audio, against the points | Median difference 7.4 ms, so no offset or padding error |
+
+`align_hybrid` misses two bars by ~1 s. They are the abrupt tempo jumps, exactly where the points help.
+
+Not checked yet: a real song with a GP8 sync, in the game.
