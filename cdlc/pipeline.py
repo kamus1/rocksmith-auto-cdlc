@@ -164,7 +164,7 @@ def resolve_tone(tone: str | None, artist: str | None, title: str | None,
         if tone:
             raise PipelineError("No tone library: run `python -m cdlc tones` first.")
         return None, "default tone (no library)"
-    entries = json.loads(index_path.read_text(encoding="utf-8"))
+    entries = [e for e in json.loads(index_path.read_text(encoding="utf-8")) if e["Arrangement"] != "Bass"]
 
     def pick(cands: list[dict]) -> dict | None:
         if not cands:
@@ -203,6 +203,22 @@ def resolve_tone(tone: str | None, artist: str | None, title: str | None,
     return None, "default tone"
 
 
+def resolve_bass_tone(artist: str | None, title: str | None) -> tuple[Path | None, str]:
+    """Bass tone from the library: the same song's, else the same artist's; None: the default bass tone."""
+    index_path = TONES_DIR / "index.json"
+    if not index_path.exists():
+        return None, "default bass tone (no library)"
+    entries = [e for e in json.loads(index_path.read_text(encoding="utf-8")) if e["Arrangement"] == "Bass"]
+    norm = lambda s: re.sub(r"[^a-z0-9]", "", (s or "").lower())
+    for label, cands in (("same song", [e for e in entries if artist and title
+                                        and norm(e["Song"]) == norm(f"{artist} - {title}")]),
+                         ("same artist", [e for e in entries if artist and norm(e["Song"].split(" - ")[0]) == norm(artist)])):
+        if cands:
+            c = sorted(cands, key=lambda e: e["File"])[0]
+            return TONES_DIR / c["File"], f"{label}: {c['Song']} / {c['Name']}"
+    return None, "default bass tone" + ("" if entries else " (no bass tones in the library: run \"cdlc tones\" again)")
+
+
 # If the source song lacks a sound, the closest one it does have (so sources are not mixed)
 CATEGORY_FALLBACK = {
     "clean": ["acoustic", "overdrive"], "acoustic": ["clean"], "overdrive": ["crunch", "distortion", "clean"],
@@ -223,7 +239,7 @@ def tone_set(categories: list[str], artist: str | None, title: str | None,
     cats = [c for c in categories if c in TONE_CATEGORIES]
     if not index_path.exists() or len(cats) < 2:
         return {}
-    entries = json.loads(index_path.read_text(encoding="utf-8"))
+    entries = [e for e in json.loads(index_path.read_text(encoding="utf-8")) if e["Arrangement"] != "Bass"]
     norm = lambda s: re.sub(r"[^a-z0-9]", "", (s or "").lower())
     by_song: dict[str, list[dict]] = {}
     for e in entries:
@@ -267,6 +283,22 @@ def tone_set(categories: list[str], artist: str | None, title: str | None,
 LEAD_HINT = re.compile(r"lead|solo|hammett|slash|gilmour", re.I)
 RHYTHM_HINT = re.compile(r"rh?yth?m|ritm|r[ií]tmica|hetfield|izzy", re.I)
 NOT_GUITAR = re.compile(r"voice|vocal|voz|melod|keys|piano|synth|organ|strings", re.I)
+BASS_NAME = re.compile(r"bass|bajo|baixo", re.I)
+NOT_BASS = re.compile(r"key|synth|piano|organ|drum|voice|vocal|voz", re.I)
+
+
+def choose_bass(info: dict, taken: set[int]) -> tuple[int | None, str]:
+    """The tab's bass track (4–6 strings named bass or with a GM bass instrument, 32–39), skipping the
+    tracks already used. Returns (track, name)."""
+    bars = max(1, info["bars"])
+    cands = [t for t in info["tracks"]
+             if t["index"] not in taken and not t["is_percussion"] and t["bars_with_notes"] >= 0.1 * bars
+             and t["strings"] in (4, 5, 6) and not NOT_BASS.search(t["name"])
+             and (BASS_NAME.search(t["name"]) or 32 <= t["program"] <= 39)]
+    if not cands:
+        return None, ""
+    best = max(cands, key=lambda t: t["bars_with_notes"])
+    return best["index"], best["name"]
 
 
 # Words that say nothing about which song a file is
@@ -451,6 +483,8 @@ class BuildOptions:
     lead: int | None = None             # None: automatic choice
     rhythm: int | None = None           # None: automatic (unless no_rhythm)
     no_rhythm: bool = False
+    bass: int | None = None             # None: automatic (unless no_bass)
+    no_bass: bool = False
     artist: str | None = None
     title: str | None = None
     album: str | None = None
@@ -518,6 +552,15 @@ def build_song(opts: BuildOptions, on_step: Callable[[int, str], None] = lambda 
     else:
         lead, rhythm = opts.lead, (None if opts.no_rhythm else opts.rhythm)
         tracks_desc = f"Lead = track {lead}" + (f", Rhythm = track {rhythm}" if rhythm is not None else "")
+    if opts.no_bass:
+        bass = None
+    elif opts.bass is not None:
+        bass = opts.bass
+        tracks_desc += f", Bass = track {bass}"
+    else:
+        bass, bass_name = choose_bass(info, {lead} | ({rhythm} if rhythm is not None else set()))
+        if bass is not None:
+            tracks_desc += f", Bass = {bass_name}"
     # Tab and audio of different songs (the alignment would still produce something): warn early
     name_warning = None
     if audio_in is not None and info["title"] and names_differ(info["artist"], info["title"], audio_in):
@@ -631,11 +674,19 @@ def build_song(opts: BuildOptions, on_step: Callable[[int, str], None] = lambda 
             tone_lines += [f"{kind.capitalize()}, {c}: {desc}" for c, (_path, desc) in chosen.items()]
     if per_track_tones:
         tone_desc += "; with tone changes: " + "; ".join(tone_lines)
+    bass_tone = None
+    if bass is not None:
+        bass_tone, bass_desc = resolve_bass_tone(meta["artist"], meta["title"])
+        tone_desc += f"; bass: {bass_desc}"
     on_step(4, f"XML, audio and packaging — tone: {tone_desc}")
     args = ["build", "--tab", str(tab), "--lead", str(lead), "--bar-times", str(out / "bar_times.json"),
             "--wav", str(wav), "--out-dir", str(out / "pkg")]
     if rhythm is not None:
         args += ["--rhythm", str(rhythm)]
+    if bass is not None:
+        args += ["--bass", str(bass)]
+        if bass_tone:
+            args += ["--tone-bass", str(bass_tone)]
     for key in ("artist", "title", "album", "year", "cover"):
         value = meta[key]
         if value:

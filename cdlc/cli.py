@@ -2,7 +2,7 @@
 
 Usage:
   python -m cdlc build --audio song.mp3 --tab song.gp     (--audio optional if the tab has embedded audio)
-                       [--timing auto|sync-points|align] [--lead N] [--rhythm M | --no-rhythm] [--artist A --title T --album A --year Y]
+                       [--timing auto|sync-points|align] [--lead N] [--rhythm M | --no-rhythm] [--bass B | --no-bass] [--artist A --title T --album A --year Y]
                        [--tone category|file] [--cover img] [--name folder] [--no-deploy] [--no-lookup]
   python -m cdlc tones
   python -m cdlc inspect --tab song.gp
@@ -22,6 +22,7 @@ from .pipeline import TONE_CATEGORIES, PipelineError
 def cmd_build(a: argparse.Namespace) -> None:
     opts = pipeline.BuildOptions(
         audio=Path(a.audio) if a.audio else None, tab=Path(a.tab), timing=a.timing, lead=a.lead, rhythm=a.rhythm, no_rhythm=a.no_rhythm,
+        bass=a.bass, no_bass=a.no_bass,
         artist=a.artist, title=a.title, album=a.album, year=a.year, cover=a.cover, tone=a.tone,
         name=a.name, variant=a.variant, pad=a.pad, deploy=not a.no_deploy, lookup=not a.no_lookup)
     pipeline.build_song(opts, on_step=lambda n, title: print(f"[{n}/{pipeline.STEPS}] {title}", flush=True),
@@ -79,6 +80,8 @@ def main(argv: list[str] | None = None) -> None:
     b.add_argument("--lead", type=int, help="tab track for the Lead arrangement (default: automatic)")
     b.add_argument("--rhythm", type=int, help="track for the Rhythm arrangement (default: automatic)")
     b.add_argument("--no-rhythm", action="store_true", help="do not generate a Rhythm arrangement")
+    b.add_argument("--bass", type=int, help="track for the Bass arrangement (default: automatic)")
+    b.add_argument("--no-bass", action="store_true", help="do not generate a Bass arrangement")
     b.add_argument("--artist")
     b.add_argument("--title")
     b.add_argument("--album")

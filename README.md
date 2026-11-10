@@ -61,7 +61,8 @@ Without this library a default tone is used. To pick one yourself: `--tone disto
 
 - The tab must match the recording (same sections and repeats).
 - Alignment can fail where the tab has almost no notes.
-- Guitar only. No tuning changes within a track.
+- Guitar and bass (no vocals). No tuning changes within a track.
+- A 5- or 6-string bass is played on 4 strings: notes on the extra strings move to the nearest kept one when the fret allows it.
 
 ## Notes
 
