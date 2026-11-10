@@ -63,7 +63,7 @@ let private usage () =
     eprintfn "                [--tones-lead \"clean=J|distortion=J\"] [--tones-rhythm ...]   (one tone per track sound)"
     eprintfn "                [--dlc-dir D]   (next version after those in D, in the title and file name)"
     eprintfn "                [--variant V]   (variant: goes in the title and key, coexists with the normal version)"
-    eprintfn "                [--wem-cmd \"python external/wem-encoder/wav2wem.py\"]   (wav → wem with this command instead of Wwise)"
+    eprintfn "                --wem-cmd \"python external/wem-encoder/wav2wem.py\"   (wav → wem command)"
     eprintfn "  RsBuild tones <dlc_folder> <out_dir>     (extracts guitar tones from the .psarc files)"
     eprintfn "  RsBuild pack <project.rs2dlc> <out_without_extension>"
     eprintfn "  RsBuild unpack <file.psarc> <out_dir>      (extracts all files and lists them)"
@@ -186,7 +186,7 @@ let main argv =
         let version = Package.nextVersion (opt "dlc-dir" "") dlcKey
         let info = { info with Version = version }
         let previewMs = float (opt "preview-ms" (string (min 60000 (songLengthMs / 3))))
-        let previewWav = Package.convertAudio wav previewMs (a.TryFind "wem-cmd")
+        let previewWav = Package.convertAudio wav previewMs (req "wem-cmd")
         let cover = Path.GetFullPath(opt "cover" (Path.Combine(toolRoot, "assets", "cover_default.png")))
         let specs = built |> List.map (fun (_, spec, _) -> spec)
         let project = Package.writeProject outDir info specs wav previewWav previewMs cover

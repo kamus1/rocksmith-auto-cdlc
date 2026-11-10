@@ -23,8 +23,7 @@ def cmd_build(a: argparse.Namespace) -> None:
     opts = pipeline.BuildOptions(
         audio=Path(a.audio), tab=Path(a.tab), lead=a.lead, rhythm=a.rhythm, no_rhythm=a.no_rhythm,
         artist=a.artist, title=a.title, album=a.album, year=a.year, cover=a.cover, tone=a.tone,
-        name=a.name, variant=a.variant, pad=a.pad, deploy=not a.no_deploy, lookup=not a.no_lookup,
-        encoder=a.encoder)
+        name=a.name, variant=a.variant, pad=a.pad, deploy=not a.no_deploy, lookup=not a.no_lookup)
     pipeline.build_song(opts, on_step=lambda n, title: print(f"[{n}/{pipeline.STEPS}] {title}", flush=True),
                         on_log=lambda line: print(f"      {line}", flush=True))
 
@@ -89,9 +88,6 @@ def main(argv: list[str] | None = None) -> None:
     b.add_argument("--pad", type=float, default=4.0, help="seconds of silence at the start (count-in)")
     b.add_argument("--no-deploy", action="store_true", help="do not copy to the game's dlc folder")
     b.add_argument("--no-lookup", action="store_true", help="do not look up album, year and cover on iTunes")
-    b.add_argument("--encoder", choices=list(pipeline.ENCODERS),
-                   help=".wem encoder: the built-in one (no Wwise) or Wwise; auto: built-in if available, else Wwise "
-                        "(default: the one in the web app's Settings, auto if none)")
     b.set_defaults(func=cmd_build)
 
     t = sub.add_parser("tones", help="extract the tone library from the installed CDLC")

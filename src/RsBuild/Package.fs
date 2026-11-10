@@ -64,7 +64,7 @@ let buildFromProject (projectPath: string) (outBase: string) =
         return outBase + "_p.psarc"
     }
 
-/// Runs an external wav → wem command: the command line, then the .wav and .wem paths as arguments.
+/// Runs the wav → wem command: the command line, then the .wav and .wem paths as arguments.
 let private runWemCommand (command: string) (wav: string) (wem: string) =
     let parts = command.Split(' ', StringSplitOptions.RemoveEmptyEntries)
     let psi = Diagnostics.ProcessStartInfo(parts[0], RedirectStandardError = true, UseShellExecute = false)
@@ -75,19 +75,14 @@ let private runWemCommand (command: string) (wav: string) (wem: string) =
     if p.ExitCode <> 0 || not (File.Exists wem) then
         failwith $"wem conversion failed ({command}): {err}"
 
-/// Creates the preview (28 s from previewStartMs) and converts song and preview to .wem:
-/// with Wwise or, if wemCommand is given, with that command (e.g. external/wem-encoder/wav2wem.py).
-let convertAudio (wav: string) (previewStartMs: float) (wemCommand: string option) =
+/// Creates the preview (28 s from previewStartMs) and converts song and preview to .wem with wemCommand
+/// (external/wem-encoder/wav2wem.py).
+let convertAudio (wav: string) (previewStartMs: float) (wemCommand: string) =
     let previewWav = Path.Combine(Path.GetDirectoryName wav, Path.GetFileNameWithoutExtension wav + "_preview.wav")
     Preview.create wav previewWav (TimeSpan.FromMilliseconds previewStartMs)
     for f in [ wav; previewWav ] do
-        match wemCommand with
-        | Some cmd ->
-            printfn "wem (built-in encoder): %s" (Path.GetFileName f)
-            runWemCommand cmd f (Path.ChangeExtension(f, "wem"))
-        | None ->
-            printfn "Wwise: %s" (Path.GetFileName f)
-            Wwise.convertToWem None f |> Async.RunSynchronously |> ignore
+        printfn "wem: %s" (Path.GetFileName f)
+        runWemCommand wemCommand f (Path.ChangeExtension(f, "wem"))
     previewWav
 
 let private sortable (s: string) =
