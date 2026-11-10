@@ -17,7 +17,8 @@ let private safeName (s: string) =
     let chars = s.ToLowerInvariant() |> Seq.map (fun c -> if Char.IsLetterOrDigit c then c else '_') |> Seq.toArray
     String(chars).Trim('_')
 
-/// Extracts the guitar (not bass) tones from the given .psarc files into outDir, with an index.json.
+/// Extracts the guitar and bass tones from the given .psarc files into outDir, with an index.json
+/// (Arrangement "Bass" marks the bass ones).
 let extract (psarcs: string seq) (outDir: string) =
     Directory.CreateDirectory outDir |> ignore
     let entries = ResizeArray<ToneEntry>()
@@ -37,13 +38,14 @@ let extract (psarcs: string seq) (outDir: string) =
                 use stream = psarc.GetEntryStream(name).Result
                 let manifest = (Manifest.fromJsonStream stream).AsTask().Result
                 let attr = Manifest.getSingletonAttributes manifest
-                let isGuitar = attr.ArrangementName <> "Bass" && attr.ArrangementName <> "Vocals" && not (isNull attr.Tones)
-                if isGuitar then
+                let isBass = attr.ArrangementName = "Bass"
+                if attr.ArrangementName <> "Vocals" && not (isNull attr.Tones) then
                     for dto in attr.Tones do
                         let tone = Tone.fromDto dto
                         let song = $"{attr.ArtistName} - {attr.SongName}"
-                        if seen.Add(song + "|" + tone.Name) then
-                            let file = $"{safeName attr.ArtistName}_{safeName attr.SongName}_{safeName tone.Name}.json"
+                        let kind = if isBass then "_bass" else ""
+                        if seen.Add($"{song}|{kind}|{tone.Name}") then
+                            let file = $"{safeName attr.ArtistName}_{safeName attr.SongName}_{safeName tone.Name}{kind}.json"
                             (Tone.exportJson (Path.Combine(outDir, file)) tone).Wait()
                             let descriptors =
                                 if isNull tone.ToneDescriptors then ""
