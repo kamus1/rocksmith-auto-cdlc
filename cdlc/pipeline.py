@@ -26,6 +26,10 @@ DEFAULT_DLC_DIR = (Path(r"C:\Program Files (x86)\Steam\steamapps\common\Rocksmit
 WEM_DIR = ROOT / "external" / "wem-encoder"          # built-in .wem encoder, no Wwise (submodule)
 WAV2WEM = WEM_DIR / "wav2wem.py"
 WEM_ENCODER = WEM_DIR / "build" / ("encode.exe" if os.name == "nt" else "encode")
+# Windows: encode.exe comes from the wem-encoder release (built by its GitHub Actions), checked by sha256
+WEM_RELEASE = "v0.1.0"
+WEM_EXE_URL = f"https://github.com/kamus1/wem-encoder/releases/download/{WEM_RELEASE}/encode.exe"
+WEM_EXE_SHA256 = "43087d01ba8ab0983e23b32cc2fdcc65ab82792e2f0c1b46a5f940da940f4919"
 CONFIG_PATH = ROOT / "config.json"                  # user settings (not in git)
 
 
@@ -97,9 +101,29 @@ def builtin_encoder() -> str | None:
     """The built-in encoder binary, or how it will be obtained; None if it cannot be used here."""
     if WEM_ENCODER.exists():
         return str(WEM_ENCODER)
-    if os.name != "nt" and shutil.which("cc") and shutil.which("make"):
+    if os.name == "nt":
+        return f"downloaded on first use (wem-encoder {WEM_RELEASE})"
+    if shutil.which("cc") and shutil.which("make"):
         return "built on first use (external/wem-encoder/build.sh)"
     return None
+
+
+def ensure_wem_encoder(on_log: Callable[[str], None] = print) -> None:
+    """Windows: downloads encode.exe from the wem-encoder release if missing (Linux builds it in wav2wem.py)."""
+    if os.name != "nt" or WEM_ENCODER.exists():
+        return
+    import hashlib
+    import urllib.request
+    on_log(f"Downloading encode.exe (wem-encoder {WEM_RELEASE})")
+    try:
+        with urllib.request.urlopen(WEM_EXE_URL, timeout=60) as resp:
+            data = resp.read()
+    except OSError as e:
+        raise PipelineError(f"Could not download encode.exe from {WEM_EXE_URL}: {e}")
+    if hashlib.sha256(data).hexdigest() != WEM_EXE_SHA256:
+        raise PipelineError(f"encode.exe from {WEM_EXE_URL} does not match its expected sha256")
+    WEM_ENCODER.parent.mkdir(parents=True, exist_ok=True)
+    WEM_ENCODER.write_bytes(data)
 
 
 def environment_checks() -> list[tuple[str, str | None, str, bool]]:
@@ -110,8 +134,7 @@ def environment_checks() -> list[tuple[str, str | None, str, bool]]:
     return [
         ("encoder", builtin_encoder(),
          "Built-in .wem encoder: on Linux it is built automatically (needs a C compiler, make and libogg); "
-         "on Windows put encode.exe in external/wem-encoder/build/ (cross-compiled on Linux with "
-         "\"sh external/wem-encoder/build.sh --windows\"). "
+         "on Windows encode.exe is downloaded from the wem-encoder release. "
          "Without it, Wwise is used if installed.", find_wwise() is None),
         ("wwise", find_wwise(),
          "Wwise 2019–2023, Authoring package (2024 or later does not work), only needed without the built-in "
@@ -617,6 +640,7 @@ def build_song(opts: BuildOptions, on_step: Callable[[int, str], None] = lambda 
     for kind, chosen in per_track_tones.items():
         args += [f"--tones-{kind}", "|".join(f"{c}={p}" for c, p in chosen.items())]
     if use_builtin:                                  # built-in encoder, no Wwise (external/wem-encoder)
+        ensure_wem_encoder(on_log)
         on_log("Audio → .wem with the built-in encoder")
         args += ["--wem-cmd", f"{sys.executable} {WAV2WEM}"]
     else:

@@ -12,7 +12,7 @@ Turns a song's audio and a Guitar Pro tab into a Rocksmith 2014 CDLC (`.psarc`) 
 - .NET 10 SDK (`winget install Microsoft.DotNet.SDK.10`)
 - ffmpeg (`winget install Gyan.FFmpeg`)
 - The `.wem` audio is made by [wem-encoder](https://github.com/kamus1/wem-encoder) (submodule in `external/`), not Wwise.
-  - On Windows it needs `external\wem-encoder\build\encode.exe`, cross-compiled on Linux with `sh external/wem-encoder/build.sh --windows`.
+  - On Windows its `encode.exe` is downloaded from the wem-encoder release the first time (checked by sha256).
   - Without it, Wwise 2023.1 (Authoring package, from the [Audiokinetic Launcher](https://www.audiokinetic.com/download/); 2024+ does not work) is used instead. `--encoder wwise` forces Wwise.
 
 ## Install
