@@ -20,7 +20,8 @@ from . import align, audio
 ROOT = Path(__file__).resolve().parent.parent
 RSBUILD = ROOT / "src" / "RsBuild" / "bin" / "Release" / "net10.0" / "RsBuild.dll"
 DOTNET = shutil.which("dotnet") or r"C:\Program Files\dotnet\dotnet.exe"
-DEFAULT_DLC_DIR = Path(r"C:\Program Files (x86)\Steam\steamapps\common\Rocksmith2014\dlc")
+DEFAULT_DLC_DIR = (Path(r"C:\Program Files (x86)\Steam\steamapps\common\Rocksmith2014\dlc") if os.name == "nt"
+                   else Path.home() / ".local" / "share" / "Steam" / "steamapps" / "common" / "Rocksmith2014" / "dlc")
 CONFIG_PATH = ROOT / "config.json"                  # user settings (not in git)
 
 
@@ -60,7 +61,9 @@ def find_wwise() -> str | None:
     if env and SUPPORTED_WWISE.search(env) and Path(env).is_dir():
         return env
     pattern = "WwiseConsole.exe"
-    roots = [r"C:\Audiokinetic", r"C:\Program Files (x86)\Audiokinetic", r"C:\Program Files\Audiokinetic"]
+    roots = ([r"C:\Audiokinetic", r"C:\Program Files (x86)\Audiokinetic", r"C:\Program Files\Audiokinetic"] if os.name == "nt"
+             # Linux: Rocksmith2014.NET runs WwiseConsole.exe with wine from this folder only
+             else [str(Path.home() / ".wine" / "drive_c" / "Program Files (x86)" / "Audiokinetic")])
     for root in roots:
         for d in sorted(glob.glob(os.path.join(root, "*")), reverse=True):
             if SUPPORTED_WWISE.search(os.path.basename(d)) and \
