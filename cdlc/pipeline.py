@@ -397,6 +397,14 @@ def deploy(psarc: Path, on_log: Callable[[str], None] = print) -> Path:
     return target
 
 
+TIMINGS = ("auto", "sync-points", "align")
+
+
+def extract_backing_track(tab: Path, out_base: Path) -> Path:
+    """Saves the tab's embedded audio (GP8 backing track) as out_base.<ext> and returns its path."""
+    return Path(rsbuild("backing-track", str(tab), str(out_base)).strip().splitlines()[-1])
+
+
 def inspect_tab(tab: Path) -> dict:
     """The tab's tracks and metadata (RsBuild inspect-json)."""
     return json.loads(rsbuild("inspect-json", str(Path(tab).resolve())))
@@ -438,7 +446,7 @@ def high_fret_notes(pkg: Path, bar_times_ms: list[float]) -> list[str]:
 
 @dataclass
 class BuildOptions:
-    audio: Path
+    audio: Path | None                  # None: the tab's embedded audio (Guitar Pro 8 backing track)
     tab: Path
     lead: int | None = None             # None: automatic choice
     rhythm: int | None = None           # None: automatic (unless no_rhythm)
@@ -452,6 +460,8 @@ class BuildOptions:
     name: str | None = None             # folder in build/
     variant: str | None = None          # variant: own title and key, coexists with the normal version
     pad: float = 4.0                    # seconds of silence at the start (count-in)
+    timing: str = "auto"                # bar times: auto (GP8 sync points if usable, else align),
+                                        # sync-points or align
     deploy: bool = True
     lookup: bool = True                 # album, year and cover from iTunes
 
@@ -479,16 +489,23 @@ def build_song(opts: BuildOptions, on_step: Callable[[int, str], None] = lambda 
         raise PipelineError("The .wem encoder cannot be built: it needs a C compiler, make and libogg "
                             "(see external/wem-encoder/README.md).")
 
-    audio_in = Path(opts.audio).resolve()
     tab = Path(opts.tab).resolve()
-    if not audio_in.is_file():
-        raise PipelineError(f"Audio file does not exist: {audio_in}")
     if not tab.is_file():
         raise PipelineError(f"Tab file does not exist: {tab}")
+    audio_in = Path(opts.audio).resolve() if opts.audio else None
+    if audio_in is not None and not audio_in.is_file():
+        raise PipelineError(f"Audio file does not exist: {audio_in}")
+    if opts.timing not in TIMINGS:
+        raise PipelineError(f"Unknown timing: {opts.timing} (use {', '.join(TIMINGS)})")
     log_lines = lambda text: [on_log(line) for line in text.strip().splitlines()]
 
     # Metadata and tracks: whatever the options do not give comes from the tab
     info = inspect_tab(tab)
+    n_sync, has_backing = info.get("sync_point_count", 0), info.get("has_backing_track", False)
+    if audio_in is None and not has_backing:
+        raise PipelineError("No audio given and the tab has no embedded audio (Guitar Pro 8 backing track).")
+    if opts.timing == "sync-points" and n_sync == 0:
+        raise PipelineError("The tab has no sync points (Guitar Pro 8): use --timing auto or align.")
     meta = {"artist": opts.artist or info["artist"] or "Unknown",
             "title": opts.title or info["title"] or tab.stem,
             "album": opts.album or info["album"] or "",
@@ -503,13 +520,17 @@ def build_song(opts: BuildOptions, on_step: Callable[[int, str], None] = lambda 
         tracks_desc = f"Lead = track {lead}" + (f", Rhythm = track {rhythm}" if rhythm is not None else "")
     # Tab and audio of different songs (the alignment would still produce something): warn early
     name_warning = None
-    if info["title"] and names_differ(info["artist"], info["title"], audio_in):
+    if audio_in is not None and info["title"] and names_differ(info["artist"], info["title"], audio_in):
         name_warning = (f"The tab ({info['artist'] or '?'} - {info['title']}) and the audio ({audio_in.name}) "
                         "seem to be different songs. Check them.")
         on_log(f"WARNING: {name_warning}")
     out = ROOT / "build" / (opts.name or slug(f"{meta['artist']} {meta['title']} {opts.variant or ''}"))
     out.mkdir(parents=True, exist_ok=True)
     on_step(0, f"{meta['artist']} - {meta['title']} | {tracks_desc}")
+    backing = None
+    if audio_in is None:
+        backing = audio_in = extract_backing_track(tab, out / "backing")
+        on_log(f"Audio: the tab's embedded backing track ({audio_in.name})")
 
     if opts.lookup and (meta["year"] is None or meta["cover"] is None or not meta["album"]):
         found = lookup_song(meta["artist"], meta["title"], on_log)
@@ -533,23 +554,53 @@ def build_song(opts: BuildOptions, on_step: Callable[[int, str], None] = lambda 
     on_step(2, "Tab timeline")
     log_lines(rsbuild("timeline", str(tab), str(out / "timeline.json")))
 
-    on_step(3, "Tab ↔ audio alignment (harmony + drums + tempo)")
-    r = align.align_hybrid(out / "timeline.json", wav, out / "bar_times.json")
-    bpm_note = (f"bar 1 at {r['bar_times_ms'][0] / 1000:.2f} s, tempo ratio {r['tempo_ratio_median']}, "
-                f"mean correction over harmony: {r['mean_abs_offset_ms']} ms, "
-                f"bars with odd tempo: {len(r['suspicious_bars'])}")
+    warnings = [name_warning] if name_warning else []
+    sync_offset = None
+    step3_shown = False
+    if opts.timing != "align" and n_sync >= (1 if opts.timing == "sync-points" else 2) and has_backing:
+        on_step(3, f"Bar times: the tab has Guitar Pro 8 sync points ({n_sync})")
+        step3_shown = True
+        if backing is not None:
+            sync_offset, source = opts.pad * 1000, "the tab's own audio"
+        else:
+            # The points refer to the embedded audio: usable only if the given audio is the same recording
+            ref = audio.to_wav(extract_backing_track(tab, out / "backing"), out / "backing.wav")
+            m = align.audio_offset(ref, wav)
+            on_log(f"Your audio vs the tab's: correlation {m['correlation']}, drift {m['drift_ms']} ms, "
+                   f"offset {m['offset_ms']} ms")
+            if m["same_recording"]:
+                sync_offset, source = m["offset_ms"], "your audio, same recording as the tab's"
+            elif opts.timing == "sync-points":
+                # Not the same recording: the offset found means nothing; assume both start together
+                sync_offset, source = opts.pad * 1000, "your audio (forced), assumed to start like the tab's"
+                warnings.append("The audio does not look like the tab's recording, but its sync points were used "
+                                "(--timing sync-points), assuming both start together: check the sync.")
+            if sync_offset is None:
+                on_log("Your audio is a different recording from the tab's: aligning instead of using its sync points.")
+    if sync_offset is not None:
+        r = align.bar_times_from_sync_points(out / "timeline.json", wav, out / "bar_times.json", sync_offset)
+        bpm_note = (f"Timing: Guitar Pro 8 sync points, {n_sync} points, offset {sync_offset:.0f} ms ({source}); "
+                    f"bar 1 at {r['bar_times_ms'][0] / 1000:.2f} s")
+    else:
+        (on_log if step3_shown else lambda t: on_step(3, t))("Tab ↔ audio alignment (harmony + drums + tempo)")
+        r = align.align_hybrid(out / "timeline.json", wav, out / "bar_times.json")
+        bpm_note = (f"bar 1 at {r['bar_times_ms'][0] / 1000:.2f} s, tempo ratio {r['tempo_ratio_median']}, "
+                    f"mean correction over harmony: {r['mean_abs_offset_ms']} ms, "
+                    f"bars with odd tempo: {len(r['suspicious_bars'])}")
     on_log(bpm_note)
     tl = json.loads((out / "timeline.json").read_text(encoding="utf-8"))
-    warnings = [name_warning] if name_warning else []
+    synced = r["method"] == "sync_points"
     # Signs of a tab from another song (thresholds: 23 right pairs vs 10 crossed ones, see docs/ALIGNMENT.md)
     kept = (r.get("tail_cut_bar") or len(r["bar_times_ms"])) - 1
     odd = len(r["suspicious_bars"]) / max(kept, 1)
+    # With sync points the tempo is the author's: only the harmony says whether tab and audio match
     signs = ([f"little harmony in common ({r['chroma_match']})"] if r["chroma_match"] < 0.025 else []) + \
-            ([f"tempo ×{r['tempo_ratio_median']:.2f} the tab's"] if not 0.85 <= r["tempo_ratio_median"] <= 1.18 else []) + \
+            ([f"tempo ×{r['tempo_ratio_median']:.2f} the tab's"]
+             if not synced and not 0.85 <= r["tempo_ratio_median"] <= 1.18 else []) + \
             ([f"{odd:.0%} of bars off-tempo"] if odd > 0.5 else [])
     if signs:
         warnings.append(f"The tab may not match the audio ({', '.join(signs)}). Check they are the same song.")
-    if not any(n[2] < 0 for n in tl["notes"]):
+    if not synced and not any(n[2] < 0 for n in tl["notes"]):
         warnings.append("The tab has no drums: fine alignment may be less accurate.")
     for k, sec in r.get("gaps", []):
         warnings.append(f"The recording has {sec:.1f} s not in the tab before bar {k}: that stretch has no notes.")

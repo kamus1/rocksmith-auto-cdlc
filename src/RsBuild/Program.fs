@@ -67,6 +67,7 @@ let private usage () =
     eprintfn "  RsBuild tones <dlc_folder> <out_dir>     (extracts guitar tones from the .psarc files)"
     eprintfn "  RsBuild pack <project.rs2dlc> <out_without_extension>"
     eprintfn "  RsBuild unpack <file.psarc> <out_dir>      (extracts all files and lists them)"
+    eprintfn "  RsBuild backing-track <tab> <out_without_extension>   (GP8: saves the embedded audio, prints its path)"
     2
 
 [<EntryPoint>]
@@ -82,6 +83,23 @@ let main argv =
     | [| "inspect"; tab |] ->
         GpImport.inspect (Path.GetFullPath tab)
         0
+    | [| "backing-track"; tab; outBase |] ->
+        match GpImport.backingTrack (GpImport.load (Path.GetFullPath tab)) with
+        | None ->
+            eprintfn "The tab has no embedded audio"
+            1
+        | Some bytes ->
+            let ext =
+                let starts (sig': string) = bytes.Length >= sig'.Length && Text.Encoding.ASCII.GetString(bytes, 0, sig'.Length) = sig'
+                if starts "OggS" then "ogg"
+                elif starts "fLaC" then "flac"
+                elif starts "RIFF" then "wav"
+                elif starts "ID3" || (bytes.Length > 1 && bytes[0] = 0xFFuy && bytes[1] &&& 0xE0uy = 0xE0uy) then "mp3"
+                else "bin"
+            let path = Path.GetFullPath outBase + "." + ext
+            File.WriteAllBytes(path, bytes)
+            printfn "%s" path
+            0
     | [| "timeline"; tab; outJson |] ->
         GpImport.exportTimeline (Path.GetFullPath tab) (Path.GetFullPath outJson)
         0
