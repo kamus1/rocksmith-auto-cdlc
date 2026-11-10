@@ -222,9 +222,3 @@ pre, .terminal { background: #000; color: #d4d4d4; border: 1px solid var(--borde
   #tone-banner-scan { order: 3; margin-left: 32px; }
   h1 { font-size: 24px; }
 }
-
-/* Advanced settings: folded and low-key on purpose */
-.advanced { margin-top: 8px; }
-.advanced summary { cursor: pointer; color: var(--faint); font-size: 12px; user-select: none; width: max-content; }
-.advanced summary:hover { color: var(--muted); }
-.advanced .inline-form { margin-top: 10px; align-items: center; }

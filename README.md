@@ -11,9 +11,8 @@ Turns a song's audio and a Guitar Pro tab into a Rocksmith 2014 CDLC (`.psarc`) 
 - Python 3.12 (`winget install Python.Python.3.12`)
 - .NET 10 SDK (`winget install Microsoft.DotNet.SDK.10`)
 - ffmpeg (`winget install Gyan.FFmpeg`)
-- The `.wem` audio is made by [wem-encoder](https://github.com/kamus1/wem-encoder) (submodule in `external/`), not Wwise.
+- No Wwise: the `.wem` audio is made by [wem-encoder](https://github.com/kamus1/wem-encoder) (submodule in `external/`).
   - On Windows its `encode.exe` is downloaded from the wem-encoder release the first time (checked by sha256).
-  - Without it, Wwise 2023.1 (Authoring package, from the [Audiokinetic Launcher](https://www.audiokinetic.com/download/); 2024+ does not work) is used instead. `--encoder wwise` forces Wwise.
 
 ## Install
 
@@ -67,7 +66,7 @@ Without this library a default tone is used. To pick one yourself: `--tone disto
 
 ## Credits
 
-- [Rocksmith2014.NET](https://github.com/iminashi/Rocksmith2014.NET) (MIT): packaging, Wwise and dynamic difficulty. The default cover image comes from its tests.
+- [Rocksmith2014.NET](https://github.com/iminashi/Rocksmith2014.NET) (MIT): packaging and dynamic difficulty. The default cover image comes from its tests.
 - [alphaTab](https://github.com/CoderLine/alphaTab): Guitar Pro reading.
 - [librosa](https://github.com/librosa/librosa): audio analysis.
 
