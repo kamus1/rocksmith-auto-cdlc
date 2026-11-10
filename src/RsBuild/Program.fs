@@ -113,8 +113,12 @@ let main argv =
     | [| "tones"; dlcDir; outDir |] ->
         let psarcs = Directory.EnumerateFiles(Path.GetFullPath dlcDir, "*_p.psarc", SearchOption.AllDirectories)
         let entries = Tones.extract psarcs (Path.GetFullPath outDir)
-        printfn "%d tones extracted to %s" entries.Count outDir
-        0
+        if entries.Count = 0 then
+            eprintfn "No tones found in %s; the existing library was left as it was." dlcDir
+            1
+        else
+            printfn "%d tones extracted to %s" entries.Count outDir
+            0
     | [| "unpack"; psarcPath; outDir |] ->
         use psarc = Rocksmith2014.PSARC.PSARC.OpenFile(Path.GetFullPath psarcPath)
         psarc.ExtractFiles(Path.GetFullPath outDir).GetAwaiter().GetResult()
