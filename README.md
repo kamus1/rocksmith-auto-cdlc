@@ -60,7 +60,7 @@ Without this library a default tone is used. To pick one yourself: `--tone disto
 ## Limitations
 
 - The tab must match the recording (same sections and repeats).
-- Alignment can fail where the tab has almost no notes.
+- Alignment can fail where the tab has almost no notes. The report lists the stretches the audio does not pin down ("Doubtful bars"); it does not catch every misaligned bar.
 - Guitar and bass (no vocals). No tuning changes within a track.
 - A 5- or 6-string bass is played on 4 strings: notes on the extra strings move to the nearest kept one when the fret allows it.
 
