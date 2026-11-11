@@ -653,6 +653,10 @@ def build_song(opts: BuildOptions, on_step: Callable[[int, str], None] = lambda 
     if r["suspicious_bars"]:
         warnings.append(f"{len(r['suspicious_bars'])} bars with a tempo very different from the rest (may be off): "
                         + ", ".join(f"b{k}" for k in r["suspicious_bars"][:12]) + ("…" if len(r["suspicious_bars"]) > 12 else ""))
+    doubtful = r.get("doubtful_bars", [])
+    if doubtful:
+        warnings.append("Bars that may be off (the audio fits them as well a beat or more away): "
+                        + ", ".join(f"b{a}–{b}" for a, b in doubtful[:8]) + ("…" if len(doubtful) > 8 else "") + ".")
     for w in warnings:
         if w is not name_warning:                   # already shown before the alignment
             on_log(f"WARNING: {w}")
@@ -724,6 +728,10 @@ def build_song(opts: BuildOptions, on_step: Callable[[int, str], None] = lambda 
             f.write(f"- Bars with odd tempo: {r['suspicious_bars'][:40]}\n")
         if r.get("gaps"):
             f.write(f"- Audio not in the tab (bar, seconds): {r['gaps']}\n")
+        if doubtful:
+            f.write("\n## Doubtful bars\n"
+                    "The audio fits these bars about as well a beat or more away from where they were placed. "
+                    "Check them in the game first.\n" + "".join(f"- Bars {a}–{b}\n" for a, b in doubtful))
         if r.get("tail_cut_bar"):
             f.write(f"- The recording ends before the tab: bars from {r['tail_cut_bar']} on left out\n")
 

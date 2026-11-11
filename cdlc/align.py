@@ -425,6 +425,49 @@ def _bar_part_chroma(tl: dict, st: np.ndarray, parts: int, use_held: bool = True
     return np.where(norm > 0, out / np.maximum(norm, 1e-9), 0)
 
 
+DOUBT_LIFT = 0.01
+DOUBT_MIN_BARS = 5
+
+
+def bar_confidence(E: np.ndarray, shifts: np.ndarray, beat_ms: float, window: int = 2,
+                   min_shift_beats: float = 1.0) -> np.ndarray:
+    """Lift of each bar: how much better its emission is where it was placed than shifted by at least
+    min_shift_beats (start and end together), averaged over the bar and its window neighbors on each
+    side, shifted together. E: (bars, shifts) fine-step emission in units of the typical bar weight,
+    NaN for bars without emission (their lift is NaN too). Near or below 0: the audio fits as well
+    (or better) a beat or more away."""
+    valid = ~np.isnan(E[:, 0])
+    W = np.where(valid[:, None], E, 0.0)
+    n = len(W)
+    c = np.cumsum(np.vstack([np.zeros((1, W.shape[1])), W]), axis=0)
+    cnt = np.concatenate([[0], np.cumsum(valid)])
+    lo = np.clip(np.arange(n) - window, 0, n)
+    hi = np.clip(np.arange(n) + window + 1, 0, n)
+    W = (c[hi] - c[lo]) / np.maximum(cnt[hi] - cnt[lo], 1)[:, None]
+    i0 = int(np.argmin(np.abs(shifts)))
+    far = np.abs(shifts) >= min_shift_beats * beat_ms
+    return np.where(valid, W[:, i0] - W[:, far].max(axis=1), np.nan)
+
+
+def doubtful_runs(conf: np.ndarray, threshold: float = DOUBT_LIFT, min_bars: int = DOUBT_MIN_BARS) -> list[list[int]]:
+    """Runs of at least min_bars bars with lift below threshold, as [first, last] (1-based, inclusive).
+    Bars without emission (no notes) neither count nor break a run."""
+    idx = np.where(~np.isnan(conf))[0]
+    low = conf[idx] < threshold
+    runs, j = [], 0
+    while j < len(idx):
+        if not low[j]:
+            j += 1
+            continue
+        e = j
+        while e < len(idx) and low[e]:
+            e += 1
+        if e - j >= min_bars:
+            runs.append([int(idx[j]) + 1, int(idx[e - 1]) + 1])
+        j = e
+    return runs
+
+
 def align_hybrid(timeline_json: Path, wav: Path, out_json: Path, radius_beats: float = 2.5,
                  grid_ms: float = 10.0, smooth_weight: float = 0.5, onset_lag_ms: float = 40.0,
                  chroma_weight: float = 3.0, chroma_parts: int = 4, anchor_weight: float = 0.3,
@@ -432,7 +475,8 @@ def align_hybrid(timeline_json: Path, wav: Path, out_json: Path, radius_beats: f
                  use_held: bool = True, per_gap_select: bool = True, gap_ban_bars: int = 4,
                  refine_weight: float = 1000.0, refine_radius_beats: float = 4.0, refine_max_ms: float = 2000.0,
                  refine_grid_ms: float = 40.0, refine_margin: float = 1.5, refine_chroma: float = 20.0,
-                 tempo_params: dict | None = None) -> dict:
+                 tempo_params: dict | None = None, confidence_beats: float = 2.0,
+                 shift_emissions_out: Path | None = None) -> dict:
     """Hybrid alignment (see the module docstring and docs/ALIGNMENT.md)."""
     import librosa
 
@@ -659,6 +703,19 @@ def align_hybrid(timeline_json: Path, wav: Path, out_json: Path, radius_beats: f
     ends = np.maximum(T[1:] - gap_ms, T[:-1] + 1)          # actual end of each bar (before the gap)
     ratio = ((ends - T[:-1]) / np.diff(st))[:cut]            # dropped bars do not count
     med = float(np.median(ratio))
+
+    # Confidence per bar: the fine-step emission of the bar where it was placed, against the same bar
+    # shifted (start and end together) by up to ±confidence_beats
+    beat_ms = float(np.median(ratio * np.diff(st)[:len(ratio)] / lens[:len(ratio)]))
+    shifts = np.arange(-confidence_beats * beat_ms, confidence_beats * beat_ms + 0.001, grid_ms)
+    E = np.full((n, len(shifts)), np.nan)
+    for k in range(n if cut is None else cut):
+        if per_bar[k] or tab_parts[k].any():
+            a, b = T[k] + shifts, ends[k] + shifts
+            e = np.zeros(len(shifts))
+            for band, frac, w in per_bar[k]:
+                e += scorers[band](a[:, None] + (b - a)[:, None] * frac[None, :], w)
+            E[k] = (e + chroma_weight * w_ref * chroma_score(k, a, b)) / w_ref
     result = {
         "bar_times_ms": [round(float(t), 1) for t in T],
         # Differs from bar_times_ms[k + 1] only if a gap follows the bar (audio not in the tab)
@@ -685,6 +742,12 @@ def align_hybrid(timeline_json: Path, wav: Path, out_json: Path, radius_beats: f
         # Mean chroma match per bar (≈ 0: the tab and the audio may be different songs)
         "chroma_match": round(chroma_curve_score(tl, y, T, use_held, bars=cut, mean=True), 3),
     }
+    conf = bar_confidence(E, shifts, beat_ms)
+    result["bar_confidence"] = [None if np.isnan(x) else round(float(x), 3) for x in conf]
+    # Runs of bars that the audio does not pin down (1-based, inclusive)
+    result["doubtful_bars"] = doubtful_runs(conf)
+    if shift_emissions_out is not None:
+        np.savez_compressed(shift_emissions_out, E=E, shifts=shifts, beat_ms=beat_ms)
     out_json.write_text(json.dumps(result, indent=1), encoding="utf-8")
     return result
 
