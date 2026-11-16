@@ -17,7 +17,8 @@ let private safeName (s: string) =
     let chars = s.ToLowerInvariant() |> Seq.map (fun c -> if Char.IsLetterOrDigit c then c else '_') |> Seq.toArray
     String(chars).Trim('_')
 
-/// Extracts the guitar (not bass) tones from the given .psarc files into outDir, with an index.json.
+/// Extracts the guitar and bass tones from the given .psarc files into outDir, with an index.json
+/// (Arrangement "Bass" marks the bass ones).
 let extract (psarcs: string seq) (outDir: string) =
     Directory.CreateDirectory outDir |> ignore
     let entries = ResizeArray<ToneEntry>()
@@ -28,7 +29,8 @@ let extract (psarcs: string seq) (outDir: string) =
         f.StartsWith "rsbuild" || Text.RegularExpressions.Regex.IsMatch(f, @"^rs[A-Z][A-Za-z]+_v\d+_p\.psarc$")
     for path in psarcs |> Seq.filter (isOurs >> not) do
         try
-            use psarc = PSARC.OpenFile path
+            // Read-only: PSARC.OpenFile asks for write access, which fails on a read-only folder
+            use psarc = PSARC.Read(File.OpenRead path)
             let manifests =
                 psarc.Manifest
                 |> Seq.filter (fun n -> n.StartsWith "manifests/" && n.EndsWith ".json")
@@ -36,13 +38,14 @@ let extract (psarcs: string seq) (outDir: string) =
                 use stream = psarc.GetEntryStream(name).Result
                 let manifest = (Manifest.fromJsonStream stream).AsTask().Result
                 let attr = Manifest.getSingletonAttributes manifest
-                let isGuitar = attr.ArrangementName <> "Bass" && attr.ArrangementName <> "Vocals" && not (isNull attr.Tones)
-                if isGuitar then
+                let isBass = attr.ArrangementName = "Bass"
+                if attr.ArrangementName <> "Vocals" && not (isNull attr.Tones) then
                     for dto in attr.Tones do
                         let tone = Tone.fromDto dto
                         let song = $"{attr.ArtistName} - {attr.SongName}"
-                        if seen.Add(song + "|" + tone.Name) then
-                            let file = $"{safeName attr.ArtistName}_{safeName attr.SongName}_{safeName tone.Name}.json"
+                        let kind = if isBass then "_bass" else ""
+                        if seen.Add($"{song}|{kind}|{tone.Name}") then
+                            let file = $"{safeName attr.ArtistName}_{safeName attr.SongName}_{safeName tone.Name}{kind}.json"
                             (Tone.exportJson (Path.Combine(outDir, file)) tone).Wait()
                             let descriptors =
                                 if isNull tone.ToneDescriptors then ""
@@ -55,6 +58,8 @@ let extract (psarcs: string seq) (outDir: string) =
                                   Descriptors = descriptors }
         with e ->
             eprintfn "Skipped %s: %s" (Path.GetFileName path) e.Message
-    let options = JsonSerializerOptions(WriteIndented = true)
-    File.WriteAllText(Path.Combine(outDir, "index.json"), JsonSerializer.Serialize(entries, options))
+    // Nothing found (wrong folder, unreadable files): keep the existing library instead of emptying it
+    if entries.Count > 0 then
+        let options = JsonSerializerOptions(WriteIndented = true)
+        File.WriteAllText(Path.Combine(outDir, "index.json"), JsonSerializer.Serialize(entries, options))
     entries

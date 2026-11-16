@@ -133,7 +133,7 @@ def _upload_dir(upload_id: str) -> Path:
 
 @app.post("/api/inspect")
 def inspect(tab: UploadFile = File(...)):
-    """Uploads the tab and returns its tracks, the automatic Lead/Rhythm choice and the metadata."""
+    """Uploads the tab and returns its tracks, the automatic Lead/Rhythm/Bass choice and the metadata."""
     upload_id = uuid.uuid4().hex[:12]
     folder = UPLOADS / upload_id
     folder.mkdir(parents=True)
@@ -141,20 +141,23 @@ def inspect(tab: UploadFile = File(...)):
     try:
         info = pipeline.inspect_tab(path)
         lead, rhythm, desc = pipeline.choose_tracks(info)
+        bass, bass_name = pipeline.choose_bass(info, {lead} | ({rhythm} if rhythm is not None else set()))
+        if bass is not None:
+            desc += f", Bass = {bass_name}"
     except PipelineError as e:
         shutil.rmtree(folder, ignore_errors=True)
         raise HTTPException(400, f"Could not read the tab (is it a Guitar Pro file?): {e}")
     (folder / "tab.json").write_text(json.dumps({"file": path.name}), encoding="utf-8")
     return {"upload_id": upload_id, "filename": path.name, "info": info,
-            "auto": {"lead": lead, "rhythm": rhythm, "description": desc}}
+            "auto": {"lead": lead, "rhythm": rhythm, "bass": bass, "description": desc}}
 
 
 @app.post("/api/build")
 def build(upload_id: str = Form(...), audio: UploadFile = File(...), lead: str = Form(""),
-          rhythm: str = Form("auto"), tone: str = Form(""), artist: str = Form(""), title: str = Form(""),
+          rhythm: str = Form("auto"), bass: str = Form("auto"), tone: str = Form(""), artist: str = Form(""), title: str = Form(""),
           album: str = Form(""), year: str = Form(""), deploy: bool = Form(True), lookup: bool = Form(True),
           variant: str = Form(""), cover: UploadFile | None = File(None)):
-    """Starts the build. rhythm: "auto", "none" or the track index. Empty lead: automatic."""
+    """Starts the build. rhythm, bass: "auto", "none" or the track index. Empty lead: automatic."""
     folder = _upload_dir(upload_id)
     tab = folder / json.loads((folder / "tab.json").read_text(encoding="utf-8"))["file"]
     audio_path = _save_upload(audio, folder)
@@ -167,6 +170,8 @@ def build(upload_id: str = Form(...), audio: UploadFile = File(...), lead: str =
             lead=int(lead) if lead.strip() else None,
             rhythm=int(rhythm) if rhythm not in ("auto", "none", "") else None,
             no_rhythm=rhythm == "none",
+            bass=int(bass) if bass not in ("auto", "none", "") else None,
+            no_bass=bass == "none",
             artist=artist.strip() or None, title=title.strip() or None, album=album.strip() or None,
             year=int(year) if year.strip() else None, cover=str(cover_path) if cover_path else None,
             tone=tone or None, deploy=deploy, lookup=lookup, variant=variant.strip() or None)

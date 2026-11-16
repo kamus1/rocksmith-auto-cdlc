@@ -243,3 +243,30 @@ Checked on alphaTab's `syncpoints-testfile.gp` (12 bars, a repeat, tempo changes
 `align_hybrid` misses two bars by ~1 s. They are the abrupt tempo jumps, exactly where the points help.
 
 Not checked yet: a real song with a GP8 sync, in the game.
+
+## Doubtful bars (2026-11-11)
+
+Without a reference there is no way to know a bar's real error, but there is a way to know whether the audio pins it down. `align_hybrid` measures it per bar after the fine step (`align.bar_confidence`):
+- **Lift:** the fine-step emission (onsets per band + chroma per chunk) of the bar where it was placed, minus its best emission shifted by 1 to 2 beats (start and end together), in units of the typical bar weight.
+- It is averaged over the bar and 2 neighbors on each side, shifted together. A single bar is too noisy.
+- Near or below 0, the audio fits that stretch as well, or better, a beat or more away. The tempo model may have put it there, but nothing in the audio confirms it.
+
+The report and the web app list as **doubtful** the runs of ≥ 5 bars with notes and lift < 0.01 (`align.doubtful_runs`, written to `bar_times.json` as `doubtful_bars`, with the lift of each bar in `bar_confidence`). The measure only reads the result: bar times do not change.
+
+Calibrated with `bench/confidence.py` (collect, then report). A bar is bad if it is off by more than ½ beat. Threshold and run length were picked on dev, then checked on both validation sets:
+
+| Set | Bad bars | Caught (inside a run) | Reported bars that are bad | Runs next to a bad bar | Clean songs with a run |
+|---|---|---|---|---|---|
+| dev (24) | 136 | 42 % | 84 % | 7/8 | 0/17 |
+| validation (12) | 21 | 38 % | 26 % | 1/5 | 0/7 |
+| validation_v2 (12) | 43 | 26 % | 65 % | 1/2 | 0/7 |
+
+Bar by bar, the area under the ROC curve (lift against bad bars) is 0.93 on dev and 0.84–0.85 on the validation sets.
+
+What it does not catch:
+- **Errors of more than 2 beats** (Superman: up to 12 beats, Boston). The shifted emission does not reach them, and there the emission at the wrong place is often high, so it looks confident.
+- **Errors of about ½ beat** (Stereophonics bars 17–31, ~0.5 beat). A half-beat shift is not tested, because on most riffs it scores almost as well as the right place.
+
+False alarms are noisy stretches where the alignment is right anyway (All That Remains bars 17–23 and 103–108, error < 0.1 beat).
+
+The plan's stage B, transcribing the guitar stem to count the matching notes, was not done. It needs Demucs and Basic Pitch.

@@ -92,6 +92,33 @@ let chordFingers (frets: sbyte[]) =
 type ArrangementKind =
     | Lead
     | Rhythm
+    | Bass
+
+/// Where the tab's strings go in Rocksmith (low string first). Guitar: the tab's 6 low strings as they are.
+/// Bass (Rocksmith has 4 strings): the 4 consecutive tab strings closest to E standard; a note on another
+/// string (low B of a 5-string, high C of a 6-string) moves to the nearest kept string at the same pitch
+/// when the fret allows it, otherwise it is dropped.
+/// Returns (tab string 1-based, fret → Rocksmith string 0-based and fret) and the open pitches of the
+/// Rocksmith strings.
+let private stringLayout (staff: Staff) (kind: ArrangementKind) =
+    let t = staff.StringTuning.Tunings |> Seq.map int |> Seq.rev |> Seq.toArray
+    match kind with
+    | Bass when t.Length > 4 ->
+        let first =
+            [ 0 .. t.Length - 4 ]
+            |> List.minBy (fun s -> Array.sumBy (fun i -> abs (t[s + i] - bassStandardMidi[i])) [| 0 .. 3 |])
+        let place (str: int) (fret: int) =
+            let s = str - 1
+            if s >= first && s < first + 4 then Some(s - first, fret)
+            else
+                let pitch = t[s] + fret
+                let target = if s < first then 0 else 3
+                let f = pitch - t[first + target]
+                if f >= 0 && f <= 24 then Some(target, f) else None
+        place, t[first .. first + 3]
+    | _ ->
+        let place (str: int) (fret: int) = if str >= 1 && str <= 6 then Some(str - 1, fret) else None
+        place, t
 
 type private Ev =
     { Time: int
@@ -108,16 +135,19 @@ let private sustainFor (ev: Ev) (n: AlphaTab.Model.Note) (tieExtra: int) =
         max 0 (dur - 10)
     else 0
 
-let private makeNote (ev: Ev) (n: AlphaTab.Model.Note) (tieExtra: int) =
+let private makeNote (ev: Ev) (n: AlphaTab.Model.Note) (str: int, fret: int) (tieExtra: int) =
     let rn = Rocksmith2014.XML.Note()
     rn.Time <- ev.Time
-    rn.String <- sbyte (int n.String - 1)
-    rn.Fret <- sbyte n.Fret
+    rn.String <- sbyte str
+    rn.Fret <- sbyte fret
+    let shift = fret - int n.Fret                  // ≠ 0 when the note moved to another string
     rn.Sustain <- sustainFor ev n tieExtra
     if n.IsPalmMute then rn.IsPalmMute <- true
     if n.IsDead then rn.IsFretHandMute <- true
     if n.Accentuated <> AccentuationType.None then rn.IsAccent <- true
     if ev.Beat.TremoloPicking <> null then rn.IsTremolo <- true
+    if ev.Beat.Slap then rn.IsSlap <- true
+    if ev.Beat.Pop then rn.IsPluck <- true
     if n.Vibrato <> VibratoType.None then rn.Vibrato <- 80uy
     match n.HarmonicType with
     | HarmonicType.Natural -> rn.IsHarmonic <- true
@@ -130,9 +160,9 @@ let private makeNote (ev: Ev) (n: AlphaTab.Model.Note) (tieExtra: int) =
     if rn.Sustain > 0 then
         match n.SlideOutType with
         | SlideOutType.Shift | SlideOutType.Legato when n.SlideTarget <> null && n.SlideTarget.Fret <> n.Fret ->
-            rn.SlideTo <- sbyte n.SlideTarget.Fret
-        | SlideOutType.OutDown -> rn.SlideUnpitchTo <- sbyte (max 1 (int n.Fret - 5))
-        | SlideOutType.OutUp -> rn.SlideUnpitchTo <- sbyte (min 24 (int n.Fret + 5))
+            rn.SlideTo <- sbyte (max 0 (min 24 (int n.SlideTarget.Fret + shift)))
+        | SlideOutType.OutDown -> rn.SlideUnpitchTo <- sbyte (max 1 (fret - 5))
+        | SlideOutType.OutUp -> rn.SlideUnpitchTo <- sbyte (min 24 (fret + 5))
         | _ -> ()
         if n.HasBend then
             let bends =
@@ -156,10 +186,15 @@ let build (score: Score) (trackIndex: int) (kind: ArrangementKind) (order: int l
           (songLengthMs: int) : BuildResult =
     let staff = score.Tracks[trackIndex].Staves[0]
     let warnings = ResizeArray<string>()
-    match staff.StringTuning.Tunings.Count with
-    | 6 -> ()
-    | 4 -> warnings.Add "4-string track (bass): played on the guitar's 4 low strings, one octave up."
-    | n -> warnings.Add $"The track has {n} strings; only 6 are used."
+    match kind, staff.StringTuning.Tunings.Count with
+    | Bass, 4 | (Lead | Rhythm), 6 -> ()
+    | Bass, n when n > 4 -> warnings.Add $"{n}-string bass: notes on the extra strings move to the nearest of the 4 kept ones."
+    | Bass, n -> warnings.Add $"The track has {n} strings; a Rocksmith bass has 4."
+    | _, 4 -> warnings.Add "4-string track (bass): played on the guitar's 4 low strings, one octave up."
+    | _, n -> warnings.Add $"The track has {n} strings; only 6 are used."
+    let place, openPitches = stringLayout staff kind
+    let placed (n: AlphaTab.Model.Note) = place (int n.String) (int n.Fret)
+    let mutable dropped = 0
 
     let timeAt (k: int) (tick: float) (barTicks: float) =
         let a, b = barTimes[k], barEnds[k]
@@ -179,15 +214,23 @@ let build (score: Score) (trackIndex: int) (kind: ArrangementKind) (order: int l
                     { Time = t0
                       DurMs = t1 - t0
                       DurTicks = beat.PlaybackDuration
-                      Notes = beat.Notes |> Seq.filter (fun n -> int n.String >= 1 && int n.String <= 6) |> Seq.toList
+                      Notes =
+                        beat.Notes
+                        |> Seq.filter (fun n ->
+                            let ok = (placed n).IsSome
+                            if not ok && kind = Bass && not n.IsTieDestination then dropped <- dropped + 1
+                            ok)
+                        |> Seq.toList
                       Beat = beat })
+    if dropped > 0 then
+        warnings.Add $"{dropped} bass notes left out: they are below the lowest kept string."
 
     // 2. Ties: the tied note is not played, it extends the sustain of the origin note
     let tieExtra = Dictionary<int * int, int>()   // (event index, string) -> extra ms
     let lastOnString = Dictionary<int, int>()     // string -> index of the last event that played it
     for i in 0 .. events.Count - 1 do
         for n in events[i].Notes do
-            let s = int n.String
+            let s = fst (placed n).Value
             if n.IsTieDestination then
                 match lastOnString.TryGetValue s with
                 | true, j ->
@@ -197,9 +240,6 @@ let build (score: Score) (trackIndex: int) (kind: ArrangementKind) (order: int l
             else
                 lastOnString[s] <- i
 
-    // MIDI pitch of each open string (low first), for naming chords
-    let openPitches = staff.StringTuning.Tunings |> Seq.map int |> Seq.rev |> Seq.toArray
-
     // 3. Notes, chords and handshapes
     let arr = InstrumentalArrangement()
     let level = Level(0y)
@@ -207,13 +247,17 @@ let build (score: Score) (trackIndex: int) (kind: ArrangementKind) (order: int l
     for i in 0 .. events.Count - 1 do
         let ev = events[i]
         let played = ev.Notes |> List.filter (fun n -> not n.IsTieDestination)
-        let extra (n: AlphaTab.Model.Note) = match tieExtra.TryGetValue((i, int n.String)) with | true, v -> v | _ -> 0
+        let extra (n: AlphaTab.Model.Note) = match tieExtra.TryGetValue((i, fst (placed n).Value)) with | true, v -> v | _ -> 0
+        // Two notes moved onto the same string: keep the first
+        let played = played |> List.distinctBy (fun n -> fst (placed n).Value)
         match played with
         | [] -> ()
-        | [ n ] -> level.Notes.Add(makeNote ev n (extra n))
+        | [ n ] -> level.Notes.Add(makeNote ev n (placed n).Value (extra n))
         | many ->
             let frets = Array.create 6 -1y
-            for n in many do frets[int n.String - 1] <- sbyte n.Fret
+            for n in many do
+                let s, f = (placed n).Value
+                frets[s] <- sbyte f
             let key = String.Join(",", frets)
             let id =
                 match templates.TryGetValue key with
@@ -231,7 +275,7 @@ let build (score: Score) (trackIndex: int) (kind: ArrangementKind) (order: int l
             let chord = Chord()
             chord.Time <- ev.Time
             chord.ChordId <- id
-            chord.ChordNotes <- many |> List.map (fun n -> makeNote ev n (extra n)) |> ResizeArray
+            chord.ChordNotes <- many |> List.map (fun n -> makeNote ev n (placed n).Value (extra n)) |> ResizeArray
             if many |> List.forall (fun n -> n.IsPalmMute) then chord.IsPalmMute <- true
             if many |> List.forall (fun n -> n.IsDead) then chord.IsFretHandMute <- true
             if many |> List.exists (fun n -> n.Accentuated <> AccentuationType.None) then chord.IsAccent <- true
@@ -298,13 +342,16 @@ let build (score: Score) (trackIndex: int) (kind: ArrangementKind) (order: int l
     // 6. Metadata
     arr.Levels.Add level
     let md = arr.MetaData
-    md.Arrangement <- (match kind with Lead -> "Lead" | Rhythm -> "Rhythm")
+    md.Arrangement <- (match kind with Lead -> "Lead" | Rhythm -> "Rhythm" | Bass -> "Bass")
     md.Title <- score.Title
     md.ArtistName <- score.Artist
     md.AlbumName <- score.Album
     md.SongLength <- songLengthMs
     md.Capo <- sbyte staff.Capo
-    let offs = tuningOffsets staff
+    let offs =
+        match kind with
+        | Bass -> Array.init 6 (fun i -> if i < 4 && i < openPitches.Length then int16 (openPitches[i] - bassStandardMidi[i]) else 0s)
+        | _ -> tuningOffsets staff
     md.Tuning.SetTuning(offs[0], offs[1], offs[2], offs[3], offs[4], offs[5])
     let barsMs = barTimes[barTimes.Length - 1] - barTimes[0]
     let beats = order |> List.sumBy (fun i -> float score.MasterBars[i].TimeSignatureNumerator)
@@ -312,6 +359,12 @@ let build (score: Score) (trackIndex: int) (kind: ArrangementKind) (order: int l
     match kind with
     | Lead -> md.ArrangementProperties.PathLead <- true
     | Rhythm -> md.ArrangementProperties.PathRhythm <- true
+    | Bass ->
+        md.ArrangementProperties.PathBass <- true
+        // Picked when the tab marks pick strokes; slap and pop are their own techniques
+        let beats = events |> Seq.map (fun e -> e.Beat)
+        md.ArrangementProperties.BassPick <- beats |> Seq.exists (fun b -> b.PickStroke <> PickStroke.None)
+        md.ArrangementProperties.SlapPop <- beats |> Seq.exists (fun b -> b.Slap || b.Pop)
     md.ArrangementProperties.StandardTuning <- (offs |> Array.forall ((=) 0s))
 
     { Arrangement = arr; Warnings = List.ofSeq warnings }

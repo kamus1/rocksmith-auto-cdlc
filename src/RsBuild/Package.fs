@@ -96,7 +96,9 @@ type ArrangementSpec =
     { Xml: string
       Kind: ArrangementBuilder.ArrangementKind
       Tuning: int16[]
-      Tones: (string * string) list }
+      Tones: (string * string) list
+      /// Bass only: played with a pick (the game then suggests a pick instead of fingers)
+      BassPicked: bool }
 
 /// Writes the .rs2dlc project (DLC Builder format). Returns its path.
 let writeProject (dir: string) (info: SongInfo) (arrangements: ArrangementSpec list) (wav: string) (previewWav: string)
@@ -116,6 +118,7 @@ let writeProject (dir: string) (info: SongInfo) (arrangements: ArrangementSpec l
             match a.Kind with
             | ArrangementBuilder.Lead -> 0, 1
             | ArrangementBuilder.Rhythm -> 2, 2
+            | ArrangementBuilder.Bass -> 3, 4         // ArrangementName.Bass, RouteMask.Bass
         JsonNode.Parse(
             JsonSerializer.Serialize(
                 {| Case = "Instrumental"
@@ -125,7 +128,7 @@ let writeProject (dir: string) (info: SongInfo) (arrangements: ArrangementSpec l
                           RouteMask = route
                           Priority = 0
                           ScrollSpeed = 1.3
-                          BassPicked = false
+                          BassPicked = a.BassPicked
                           Tuning = a.Tuning
                           TuningPitch = 440.0
                           BaseTone = fst a.Tones.Head

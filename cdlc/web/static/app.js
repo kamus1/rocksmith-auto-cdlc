@@ -164,10 +164,12 @@ function renderSetup(r) {
       el("td", {}, t.is_percussion ? "Drums" : (GM[t.program] || `MIDI ${t.program}`)),
       el("td", { class: "tones", title: "Sound changes marked in the tab: each one becomes a tone change in the game" }, toneText(t)),
       el("td", { class: "c" }, usable ? el("input", { type: "radio", name: "lead", value: t.index, checked: t.index === auto.lead, "aria-label": `Lead: ${t.name}` }) : ""),
-      el("td", { class: "c" }, usable ? el("input", { type: "radio", name: "rhythm", value: t.index, checked: t.index === auto.rhythm, "aria-label": `Rhythm: ${t.name}` }) : ""));
+      el("td", { class: "c" }, usable ? el("input", { type: "radio", name: "rhythm", value: t.index, checked: t.index === auto.rhythm, "aria-label": `Rhythm: ${t.name}` }) : ""),
+      el("td", { class: "c" }, usable ? el("input", { type: "radio", name: "bass", value: t.index, checked: t.index === auto.bass, "aria-label": `Bass: ${t.name}` }) : ""));
   });
   $("#tracks tbody").replaceChildren(...rows);
   document.querySelector('input[name=rhythm][value=none]').checked = auto.rhythm == null;
+  document.querySelector('input[name=bass][value=none]').checked = auto.bass == null;
   $("#m-artist").value = info.artist || "";
   $("#m-title").value = info.title || "";
   $("#m-album").value = info.album || "";
@@ -235,6 +237,7 @@ $("#btn-build").addEventListener("click", async () => {
   fd.append("audio", state.audio);
   fd.append("lead", document.querySelector("input[name=lead]:checked")?.value ?? "");
   fd.append("rhythm", document.querySelector("input[name=rhythm]:checked")?.value ?? "none");
+  fd.append("bass", document.querySelector("input[name=bass]:checked")?.value ?? "none");
   for (const k of ["artist", "title", "album", "year", "tone", "variant"]) fd.append(k, $(`#m-${k}`).value);
   fd.append("deploy", $("#m-deploy").checked);
   fd.append("lookup", $("#m-lookup").checked);
