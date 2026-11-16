@@ -42,6 +42,11 @@ Command line:
 
 Then go back to the game's title screen to load the new song.
 
+**Guitar Pro 8 tabs with an audio track and sync points:**
+- With `--audio` left out, the tab's own audio is used.
+- With `--audio`, the sync points are used when that audio is the same recording as the tab's. Otherwise the tab is aligned as usual.
+- `--timing sync-points` or `--timing align` forces one or the other.
+
 The game folder defaults to Steam's `Rocksmith2014/dlc`. Change it in the web app's Settings.
 
 ## Tones
@@ -55,8 +60,9 @@ Without this library a default tone is used. To pick one yourself: `--tone disto
 ## Limitations
 
 - The tab must match the recording (same sections and repeats).
-- Alignment can fail where the tab has almost no notes.
-- Guitar only. No tuning changes within a track.
+- Alignment can fail where the tab has almost no notes. The report lists the stretches the audio does not pin down ("Doubtful bars"); it does not catch every misaligned bar.
+- Guitar and bass (no vocals). No tuning changes within a track.
+- A 5- or 6-string bass is played on 4 strings: notes on the extra strings move to the nearest kept one when the fret allows it.
 
 ## Notes
 

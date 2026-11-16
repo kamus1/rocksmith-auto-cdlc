@@ -213,3 +213,60 @@ Results with the final version: dev (24) and validation v3 (12) identical song b
 
 ### Tab and audio of different songs (2026-11-08)
 The build warns when the tab's artist and title share no word with the audio's file name and tags, and when the alignment shows signs of a different song: `chroma_match` (mean chroma emission per bar) < 0.025, median tempo ratio outside 0.85–1.18, or more than 50% of bars off-tempo. Calibration (full alignment, 23 right pairs from the benchmark and `samples/`, 10 crossed pairs): right pairs have `chroma_match` 0.033–0.129, ratio 0.95–1.01 and at most 35% of odd bars (Machine Head); the rule warns on all 10 crossed pairs and on none of the right ones. Three more crossed pairs ran out of memory (long audio).
+
+## Guitar Pro 8 sync points (2026-11-10)
+
+A GP8 tab can carry its own audio track and sync points: a bar (and its repeat pass) mapped to a millisecond of that audio. When a tab has them, the bar times come from the points instead of `align_hybrid` (`align.bar_times_from_sync_points`):
+- **Between two points:** time is interpolated in proportion to the written duration (quarters). This is how GP plays them, with one tempo per stretch.
+- **Before the first and after the last point:** the nearest stretch's ratio to the written tempo carries on.
+- **alphaTab 1.8.4** gives the points already in milliseconds of the audio file, with GP's `FramePadding` already subtracted (`GpifParser`). `RsBuild timeline` writes them as `sync_points` in playback order.
+
+The points refer to the embedded audio, so the pipeline (`--timing auto`) uses them in two cases:
+- **No `--audio` given:** the embedded audio is used, and the offset is just the leading silence.
+- **`--audio` given:** the points are used only if that audio is the same recording as the tab's (`align.audio_offset`).
+  - It cross-correlates onset envelopes on a window at the start of the tab's audio and one at its end.
+  - Same recording means Pearson correlation ≥ 0.3 on both windows and a drift between them of ≤ 60 ms.
+  - The offset is then refined to the sample by waveform cross-correlation.
+  - Anything else falls back to `align_hybrid`.
+
+Checked on alphaTab's `syncpoints-testfile.gp` (12 bars, a repeat, tempo changes, 9 points):
+
+| Check | Result |
+|---|---|
+| Notes in the built arrangement | Exactly at the points' times |
+| Same audio, with 4 s of silence added | Recognized, offset exactly 4000 ms (correlation 0.96) |
+| Same audio, 1.5 s trimmed and re-encoded to MP3 | Recognized, offset exactly 2500 ms (correlation 0.94) |
+| Same audio, 2 % faster | Rejected: drift −470 ms, correlation 0.12 |
+| Another song | Rejected: correlation 0.18 |
+| `align_hybrid` on the same audio, against the points | Median difference 7.4 ms, so no offset or padding error |
+
+`align_hybrid` misses two bars by ~1 s. They are the abrupt tempo jumps, exactly where the points help.
+
+Not checked yet: a real song with a GP8 sync, in the game.
+
+## Doubtful bars (2026-11-11)
+
+Without a reference there is no way to know a bar's real error, but there is a way to know whether the audio pins it down. `align_hybrid` measures it per bar after the fine step (`align.bar_confidence`):
+- **Lift:** the fine-step emission (onsets per band + chroma per chunk) of the bar where it was placed, minus its best emission shifted by 1 to 2 beats (start and end together), in units of the typical bar weight.
+- It is averaged over the bar and 2 neighbors on each side, shifted together. A single bar is too noisy.
+- Near or below 0, the audio fits that stretch as well, or better, a beat or more away. The tempo model may have put it there, but nothing in the audio confirms it.
+
+The report and the web app list as **doubtful** the runs of ≥ 5 bars with notes and lift < 0.01 (`align.doubtful_runs`, written to `bar_times.json` as `doubtful_bars`, with the lift of each bar in `bar_confidence`). The measure only reads the result: bar times do not change.
+
+Calibrated with `bench/confidence.py` (collect, then report). A bar is bad if it is off by more than ½ beat. Threshold and run length were picked on dev, then checked on both validation sets:
+
+| Set | Bad bars | Caught (inside a run) | Reported bars that are bad | Runs next to a bad bar | Clean songs with a run |
+|---|---|---|---|---|---|
+| dev (24) | 136 | 42 % | 84 % | 7/8 | 0/17 |
+| validation (12) | 21 | 38 % | 26 % | 1/5 | 0/7 |
+| validation_v2 (12) | 43 | 26 % | 65 % | 1/2 | 0/7 |
+
+Bar by bar, the area under the ROC curve (lift against bad bars) is 0.93 on dev and 0.84–0.85 on the validation sets.
+
+What it does not catch:
+- **Errors of more than 2 beats** (Superman: up to 12 beats, Boston). The shifted emission does not reach them, and there the emission at the wrong place is often high, so it looks confident.
+- **Errors of about ½ beat** (Stereophonics bars 17–31, ~0.5 beat). A half-beat shift is not tested, because on most riffs it scores almost as well as the right place.
+
+False alarms are noisy stretches where the alignment is right anyway (All That Remains bars 17–23 and 103–108, error < 0.1 beat).
+
+The plan's stage B, transcribing the guitar stem to count the matching notes, was not done. It needs Demucs and Basic Pitch.

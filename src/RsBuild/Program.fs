@@ -58,7 +58,7 @@ let private usage () =
     eprintfn "  RsBuild inspect <tab>"
     eprintfn "  RsBuild timeline <tab> <out.json>"
     eprintfn "  RsBuild xml <tab> <track> <offset_ms> <length_ms> <out.xml>      (written tempo)"
-    eprintfn "  RsBuild build --tab T --lead N [--rhythm M] --bar-times J --wav W --out-dir D"
+    eprintfn "  RsBuild build --tab T --lead N [--rhythm M] [--bass B] --bar-times J --wav W --out-dir D"
     eprintfn "                --artist A --title T [--album A] [--year Y] [--cover C] [--preview-ms P] [--tone J]"
     eprintfn "                [--tones-lead \"clean=J|distortion=J\"] [--tones-rhythm ...]   (one tone per track sound)"
     eprintfn "                [--dlc-dir D]   (next version after those in D, in the title and file name)"
@@ -67,6 +67,7 @@ let private usage () =
     eprintfn "  RsBuild tones <dlc_folder> <out_dir>     (extracts guitar tones from the .psarc files)"
     eprintfn "  RsBuild pack <project.rs2dlc> <out_without_extension>"
     eprintfn "  RsBuild unpack <file.psarc> <out_dir>      (extracts all files and lists them)"
+    eprintfn "  RsBuild backing-track <tab> <out_without_extension>   (GP8: saves the embedded audio, prints its path)"
     2
 
 [<EntryPoint>]
@@ -82,6 +83,23 @@ let main argv =
     | [| "inspect"; tab |] ->
         GpImport.inspect (Path.GetFullPath tab)
         0
+    | [| "backing-track"; tab; outBase |] ->
+        match GpImport.backingTrack (GpImport.load (Path.GetFullPath tab)) with
+        | None ->
+            eprintfn "The tab has no embedded audio"
+            1
+        | Some bytes ->
+            let ext =
+                let starts (sig': string) = bytes.Length >= sig'.Length && Text.Encoding.ASCII.GetString(bytes, 0, sig'.Length) = sig'
+                if starts "OggS" then "ogg"
+                elif starts "fLaC" then "flac"
+                elif starts "RIFF" then "wav"
+                elif starts "ID3" || (bytes.Length > 1 && bytes[0] = 0xFFuy && bytes[1] &&& 0xE0uy = 0xE0uy) then "mp3"
+                else "bin"
+            let path = Path.GetFullPath outBase + "." + ext
+            File.WriteAllBytes(path, bytes)
+            printfn "%s" path
+            0
     | [| "timeline"; tab; outJson |] ->
         GpImport.exportTimeline (Path.GetFullPath tab) (Path.GetFullPath outJson)
         0
@@ -95,8 +113,12 @@ let main argv =
     | [| "tones"; dlcDir; outDir |] ->
         let psarcs = Directory.EnumerateFiles(Path.GetFullPath dlcDir, "*_p.psarc", SearchOption.AllDirectories)
         let entries = Tones.extract psarcs (Path.GetFullPath outDir)
-        printfn "%d tones extracted to %s" entries.Count outDir
-        0
+        if entries.Count = 0 then
+            eprintfn "No tones found in %s; the existing library was left as it was." dlcDir
+            1
+        else
+            printfn "%d tones extracted to %s" entries.Count outDir
+            0
     | [| "unpack"; psarcPath; outDir |] ->
         use psarc = Rocksmith2014.PSARC.PSARC.OpenFile(Path.GetFullPath psarcPath)
         psarc.ExtractFiles(Path.GetFullPath outDir).GetAwaiter().GetResult()
@@ -144,10 +166,14 @@ let main argv =
             [ yield ArrangementBuilder.Lead, int (req "lead")
               match a.TryFind "rhythm" with
               | Some m -> yield ArrangementBuilder.Rhythm, int m
+              | None -> ()
+              match a.TryFind "bass" with
+              | Some b -> yield ArrangementBuilder.Bass, int b
               | None -> () ]
         let toolRoot = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", ".."))
         let defaultTone = Path.GetFullPath(opt "tone" (Path.Combine(toolRoot, "assets", "tones", "lead_default.json")))
-        // --tones-lead / --tones-rhythm "category=file|category=file": one tone per track sound
+        let defaultBassTone = Path.GetFullPath(opt "tone-bass" (Path.Combine(toolRoot, "assets", "tones", "bass_default.json")))
+        // --tones-lead / --tones-rhythm / --tones-bass "category=file|category=file": one tone per track sound
         let toneFiles (kind: ArrangementBuilder.ArrangementKind) =
             match a.TryFind $"tones-{(string kind).ToLowerInvariant()}" with
             | None | Some "" -> Map.empty
@@ -170,8 +196,13 @@ let main argv =
                         keysUsed |> List.map (fun key -> key, files[key.Substring(name.Length + 1)])
                     else
                         let single = keysUsed |> List.tryHead |> Option.bind (fun key -> files.TryFind(key.Substring(name.Length + 1)))
-                        [ "guitar", Option.defaultValue defaultTone single ]
-                score, { Package.Xml = xml; Package.Kind = kind; Package.Tuning = arr.MetaData.Tuning.Strings; Package.Tones = tones }, report)
+                        match kind with
+                        | ArrangementBuilder.Bass -> [ "bass", Option.defaultValue defaultBassTone single ]
+                        | _ -> [ "guitar", Option.defaultValue defaultTone single ]
+                score,
+                { Package.Xml = xml; Package.Kind = kind; Package.Tuning = arr.MetaData.Tuning.Strings; Package.Tones = tones
+                  Package.BassPicked = arr.MetaData.ArrangementProperties.BassPick },
+                report)
         let score, _, _ = List.head built
         let report = built |> List.collect (fun (_, _, r) -> r)
         let info =

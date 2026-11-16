@@ -1,0 +1,27 @@
+{
+  "GearList": {
+    "Amp": {
+      "Type": "Amps",
+      "KnobValues": {
+        "Bass_Amp_OrangeAD200B_Gain": 35,
+        "Bass_Amp_OrangeAD200B_Bass": 60,
+        "Bass_Amp_OrangeAD200B_Mid": 55,
+        "Bass_Amp_OrangeAD200B_Treble": 50
+      },
+      "Key": "Bass_Amp_OrangeAD200B"
+    },
+    "Cabinet": {
+      "Type": "Cabinets",
+      "KnobValues": {},
+      "Key": "Bass_Cab_OrangeOBC115_57_Cone"
+    }
+  },
+  "ToneDescriptors": [
+    "$[35715]BASS"
+  ],
+  "NameSeparator": " - ",
+  "IsCustom": true,
+  "Volume": "-19.5",
+  "Key": "bass",
+  "Name": "bass"
+}

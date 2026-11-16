@@ -29,6 +29,24 @@ let playbackOrder (s: Score) : int list =
                 loop (i + 1) repeatStart pass acc
     loop 0 0 0 []
 
+/// Guitar Pro 8 sync points mapped to the playback order: (bar index in playback order, position 0–1 in the
+/// bar, millisecond in the embedded backing track). Each point names a masterbar and which repeat pass
+/// (BarOccurence) it is for; that is the n-th time the bar appears in the playback order.
+let syncPoints (s: Score) (order: int list) : (int * float * float) list =
+    let occurrences = order |> List.mapi (fun k i -> i, k) |> List.groupBy fst |> Map.ofList
+    [ for p in s.ExportFlatSyncPoints() do
+          match occurrences.TryFind(int p.BarIndex) with
+          | Some ks when int p.BarOccurence < ks.Length -> yield snd ks[int p.BarOccurence], p.BarPosition, p.MillisecondOffset
+          | _ -> () ]
+    |> List.sortBy (fun (k, pos, _) -> float k + pos)
+
+/// The audio embedded in the tab (Guitar Pro 8 backing track), if any.
+let backingTrack (s: Score) : byte[] option =
+    match s.BackingTrack with
+    | null -> None
+    | bt when isNull bt.RawAudioFile -> None
+    | bt -> Some(bt.RawAudioFile |> Seq.toArray)
+
 /// Estimated duration (s) following the playback order and the written tempo.
 let estimatedSeconds (s: Score) =
     let mutable tempo = 120.0
@@ -145,7 +163,10 @@ let exportTimeline (path: string) (outJson: string) =
                bar_quarters = order |> List.map (fun i -> s.MasterBars[i].CalculateDuration(false) / 960.0)
                notes = notes
                held = held
-               masterbar_of_bar = order |})
+               masterbar_of_bar = order
+               // GP8: [bar in playback order, position 0–1, ms in the embedded audio], sorted
+               sync_points = syncPoints s order |> List.map (fun (k, pos, ms) -> [| float k; pos; ms |])
+               has_backing_track = (backingTrack s).IsSome |})
     File.WriteAllText(outJson, json)
     printfn "Timeline: %d bars, %d notes (+%d without attack: ties and bends), %.1f s -> %s"
         order.Length notes.Count held.Count (starts[starts.Count - 1] / 1000.0) outJson
@@ -248,5 +269,7 @@ let inspectJson (path: string) =
            artist = s.Artist
            album = s.Album
            bars = order.Length
+           sync_point_count = (syncPoints s order).Length
+           has_backing_track = (backingTrack s).IsSome
            tracks = tracks |}
     System.Text.Json.JsonSerializer.Serialize(info)
