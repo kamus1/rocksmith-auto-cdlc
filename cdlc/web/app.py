@@ -343,6 +343,25 @@ def redeploy(name: str):
     return {"deployed": target.name, "log": logs}
 
 
+@app.post("/api/songs/{name}/cover/lookup")
+def song_cover_lookup(name: str):
+    """Looks up the cover on iTunes again and packs the song with it. If it was in the game, copies the new one."""
+    d = _song_dir(name)
+    old = _psarc(d)
+    was_deployed = old is not None and _deployed(old) is not None
+    if not _busy.acquire(blocking=False):
+        raise HTTPException(409, "A job is running; wait for it to finish.")
+    logs = []
+    try:
+        r = pipeline.refresh_cover(d, logs.append)
+        deployed = pipeline.deploy(r["psarc"], logs.append).name if was_deployed else None
+    except PipelineError as e:
+        raise HTTPException(400, str(e))
+    finally:
+        _busy.release()
+    return {"album": r["album"], "year": r["year"], "deployed": deployed, "log": logs}
+
+
 @app.get("/api/songs/{name}/cover")
 def song_cover(name: str):
     path = _song_dir(name) / "cover.jpg"

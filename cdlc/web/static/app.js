@@ -377,6 +377,14 @@ async function loadSongs() {
         el("span", { class: "faint small" }, `Generated ${new Date(s.built * 1000).toLocaleString("en-US")}`),
         el("div", { class: "song-actions" },
           el("button", { class: "btn sm", disabled: !s.report, onclick: () => showReport(s) }, "Report"),
+          el("button", { class: "btn sm", title: "Look up the cover on iTunes again and pack the song with it", onclick: async (e) => {
+            e.target.disabled = true; e.target.textContent = "Searching…";
+            try {
+              const r = await api(`/api/songs/${s.name}/cover/lookup`, { method: "POST" });
+              toast(`Cover found (${r.album || "iTunes"}).` + (r.deployed ? ` Copied as ${r.deployed}: go back to the game's title screen.` : ""));
+              loadSongs();
+            } catch (err) { toast(err.message); e.target.disabled = false; e.target.textContent = "Find cover"; }
+          } }, "Find cover"),
           el("button", { class: "btn sm", onclick: async (e) => {
             e.target.disabled = true;
             try {

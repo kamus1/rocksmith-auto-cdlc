@@ -404,6 +404,48 @@ def download_cover(url: str, dest: Path, on_log: Callable[[str], None] = print) 
         return None
 
 
+def refresh_cover(song_dir: Path, on_log: Callable[[str], None] = print) -> dict:
+    """Looks up the cover of a generated song again on iTunes and packs it again with it (no new alignment).
+
+    The new package gets the next version, above the one in the game too, so that the game loads it.
+    Album and year are filled in if they were empty. Returns {"album", "year", "psarc"}.
+    """
+    pkg = Path(song_dir) / "pkg"
+    projects = sorted(pkg.glob("*.rs2dlc"))
+    if not projects:
+        raise PipelineError(f"No .rs2dlc project in {pkg}: generate the song again.")
+    project_path = projects[0]
+    project = json.loads(project_path.read_text(encoding="utf-8-sig"))
+    artist, shown = project["ArtistName"]["Value"], project["Title"]["Value"]
+    m = re.search(r" \(v(\d+)\)$", shown)
+    title = TAB_VERSION.sub("", re.sub(r" \[[^\]]*\]$", "", shown[:m.start()] if m else shown)).strip()
+    found = lookup_song(artist, title, on_log)
+    if not found.get("cover_url"):
+        raise PipelineError(f"iTunes has no cover for {artist} - {title}. Choose one yourself when generating the song.")
+    cover = download_cover(found["cover_url"], Path(song_dir) / "cover.jpg", on_log)
+    if cover is None:
+        raise PipelineError("The cover was found on iTunes but could not be downloaded. Try again later.")
+
+    key = project["DLCKey"]
+    versions = [int(v.group(1)) for f in [*pkg.glob(f"{key}_v*_p.psarc"),
+                                          *(dlc_dir().glob(f"{key}_v*_p.psarc") if dlc_dir().is_dir() else [])]
+                if (v := re.search(r"_v(\d+)_p\.psarc$", f.name))]
+    version = max(versions, default=0) + 1
+    if m:
+        new_title = shown[:m.start()] + f" (v{version})"
+        project["Title"] = {"Value": new_title, "SortValue": new_title}
+    project["AlbumArtFile"] = os.path.relpath(cover, pkg)
+    if not project["AlbumName"]["Value"] and found.get("album"):
+        project["AlbumName"] = {"Value": found["album"], "SortValue": found["album"]}
+    if not project.get("Year") and found.get("year"):
+        project["Year"] = found["year"]
+    project_path.write_text(json.dumps(project, indent=2, ensure_ascii=False), encoding="utf-8")
+    out = rsbuild("pack", str(project_path), str(pkg / f"{key}_v{version}"))
+    psarc = Path(out.strip().removeprefix("OK ").strip())
+    on_log(f"Cover from iTunes ({project['AlbumName']['Value']}), packed as {psarc.name}")
+    return {"album": project["AlbumName"]["Value"], "year": project.get("Year"), "psarc": psarc}
+
+
 def slug(text: str) -> str:
     return re.sub(r"[^a-z0-9]+", "-", text.lower()).strip("-") or "song"
 
