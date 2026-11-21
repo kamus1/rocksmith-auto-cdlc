@@ -128,6 +128,8 @@ input[type=file]::file-selector-button { font: inherit; font-size: 13px; height:
 .btn.primary:hover:not(:disabled) { background: color-mix(in srgb, var(--primary) 85%, var(--bg)); }
 .btn:disabled { opacity: .45; cursor: not-allowed; }
 .btn.sm { height: 30px; padding: 0 10px; font-size: 13px; }
+.head-actions { margin-left: auto; display: inline-flex; align-items: center; gap: 12px; }
+.btn[hidden] { display: none; }
 .btn.icon { width: 32px; height: 32px; padding: 0; }
 
 /* Progress */

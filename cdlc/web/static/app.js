@@ -292,7 +292,14 @@ function followBuild(jobId) {
     setStep(current, cls);
     current.querySelector(".time").textContent = `${(t - since).toFixed(1)} s`;
   };
-  const end = () => { clearInterval(elapsedTimer); state.running = false; updateBuildButton(); };
+  const stop = $("#btn-stop");
+  const end = () => { clearInterval(elapsedTimer); state.running = false; updateBuildButton(); stop.hidden = true; };
+  stop.hidden = false; stop.disabled = false; stop.textContent = "Stop";
+  stop.onclick = async () => {
+    stop.disabled = true; stop.textContent = "Stopping…";
+    try { await api(`/api/jobs/${jobId}/stop`, { method: "POST" }); }
+    catch (e) { toast(e.message); stop.disabled = false; stop.textContent = "Stop"; }
+  };
   follow(jobId, (ev) => {
     if (ev.type === "step") {
       finishCurrent(ev.t);
@@ -318,6 +325,15 @@ function followBuild(jobId) {
       if (ev.detail) $("#log").textContent += `\n${ev.detail}`;
       $("#log-box").open = true;
       end();
+    } else if (ev.type === "stopped") {
+      finishCurrent(ev.t, "error");
+      $("#log").textContent += "Stopped.\n";
+      const again = !!(state.upload && state.audio);   // not after a page reload: the files are gone
+      showResult(false, el("strong", {}, "Stopped"),
+        el("span", { class: "muted small" }, again ? "Nothing was copied to the game. The tab and the audio are still chosen."
+          : "Nothing was copied to the game."),
+        again ? el("div", {}, el("button", { class: "btn sm", onclick: () => $("#btn-build").click() }, "Generate again")) : null);
+      end();
     }
     const log = $("#log"); log.scrollTop = log.scrollHeight;
   });
@@ -328,7 +344,7 @@ function follow(jobId, onEvent) {
   es.onmessage = (m) => {
     const ev = JSON.parse(m.data);
     onEvent(ev);
-    if (ev.type === "done" || ev.type === "error") es.close();
+    if (ev.type === "done" || ev.type === "error" || ev.type === "stopped") es.close();
   };
   return es;
 }

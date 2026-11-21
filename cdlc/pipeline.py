@@ -420,7 +420,9 @@ def deploy(psarc: Path, on_log: Callable[[str], None] = print) -> Path:
     version = max(max((int(pattern.match(p.name).group(1)) for p in old), default=0) + 1,
                   int(own.group(1)) if own else 0)
     target = target_dir / f"{key}_v{version}_p.psarc"
-    shutil.copy2(psarc, target)
+    part = target.with_name(target.name + ".part")   # a stopped build never leaves a cut .psarc in dlc/
+    shutil.copy2(psarc, part)
+    os.replace(part, target)
     for p in old:
         try:
             p.unlink()
