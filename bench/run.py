@@ -134,12 +134,12 @@ def build_timeline(d: Path, drop: int = 0, tag: str = "") -> tuple[Path, np.ndar
             pitch_at = lambda x: midi + round(2 * next((st_ for bt, st_ in reversed(bend) if nominal(bt) <= x + 0.5), 0.0))
             pieces = [(cuts[i], cuts[i + 1] - cuts[i], pitch_at(cuts[i])) for i in range(len(cuts) - 1)] or [(t0, 0.0, midi)]
             notes.append([round(t0, 1), round(pieces[0][1], 1), pieces[0][2], track])
-            held += [[round(a_, 1), round(du, 1), m] for a_, du, m in pieces[1:] if du > 0]
+            held += [[round(a_, 1), round(du, 1), m, track] for a_, du, m in pieces[1:] if du > 0]
     if drop:
         j = int(len(bar_quarters) * 0.6)
         a, b = bar_starts[j], bar_starts[j + drop]
         notes = [[t - (b - a) if t >= b else t, du, m, tr] for t, du, m, tr in notes if not a <= t < b]
-        held = [[t - (b - a) if t >= b else t, du, m] for t, du, m in held if not a <= t < b]
+        held = [[t - (b - a) if t >= b else t, du, m, tr] for t, du, m, tr in held if not a <= t < b]
         bar_starts = np.concatenate([bar_starts[:j], bar_starts[j + drop:] - (b - a)])
         bar_quarters = np.concatenate([bar_quarters[:j], bar_quarters[j + drop:]])
         truth = np.concatenate([truth[:j], truth[j + drop:]])

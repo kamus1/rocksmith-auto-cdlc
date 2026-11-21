@@ -2,13 +2,13 @@
 
 **Status (2026-10-24, 2nd session):** `cdlc build` uses the **hybrid alignment** (`align_hybrid`) with a **tempo DP** in the coarse stage. Benchmark: dev 1.2% of bars off by more than ½ beat (11/12 songs good); validation 6.7% (10/12). **Validated in the game** (MoP and SNA, 2026-10-24). Afterwards, the user noticed that the **end of SNA went out of sync**: the recording has a riff cycle (~4 s) that the tab does not have, and the tempo DP, which chains the bars without gaps, pulled everything after it earlier (it ended at 230.6 s; the music, at 235). Fixed with gaps (point 4 of the method); it now ends at 234.4 s. Deployed `rsTheWhSeven_v8`, pending testing.
 
-**Master of Puppets with the new method** (tab ver 7, 10 s windows against Nacholede): median 10 ms, 0% of windows > 100 ms, 49/49 reliable windows. It fixes the intro (+210 → −30 ms) and the ending (−2,850 → +30 ms) of the previous method. It takes 118 s (60 before). The memory peak, 2.8 GB, is the same as before and comes from the full DTW of `chroma_warp`, which now only provides the global tempo: it could be replaced with something cheap (rerunning the benchmark).
+**Master of Puppets with the new method** (tab ver 7, 10 s windows against Nacholede): median 10 ms, 0% of windows > 100 ms, 49/49 reliable windows. It fixes the intro (+210 → −30 ms) and the ending (−2,850 → +30 ms) of the previous method. It takes 118 s (60 before). The memory peak, 2.8 GB, is the same as before and comes from the full DTW of `chroma_warp`, which now only provides the global tempo: it could be replaced with something cheap (rerunning the benchmark). (2026-11-18: `chroma_warp` was removed and the peak stays at 2.9 GB, so it did not come from the DTW. The run takes 106 s instead of 119.)
 **Seven Nation Army:** matches the validated grid (median 9 ms, maximum 48 ms). The previous hybrid drifted up to 4.7 s in the last 18 bars.
 Deployed for testing: `rsMetalMaste_v2_p.psarc` and `rsTheWhSeven_v7_p.psarc`.
 
 ## Current method: `align_hybrid`
-1. **Harmony DTW** (`chroma_warp`): only to estimate the global tempo ratio (median).
-2. **Tempo DP** (`tempo_dp`), the coarse stage. State at each bar boundary = (instant on a 25 ms grid, tempo ratio in 1.5% steps, ±35% around the global one). Each bar lasts its nominal length × the ratio. The tempo can change by up to ±3 steps (±4.5%) per bar at almost no cost (0.002 × steps²). A larger change (section change) costs 1.0. Emission = cosine between the tab chroma (16 instants per bar) and the audio CQT chroma, minus its mean over the whole audio. Unsmoothed chroma. The lag of the audio chroma relative to the attack (160 ms) is compensated at the end. Constraint: no note before the audio starts sounding. Empty bars at the ends extend the tempo of the ends.
+1. **Starting tempo:** the tab's written tempo. Until 2026-11-18 a harmony DTW (`chroma_warp`) estimated a global tempo ratio first; it was removed because it broke on real tabs (see [Real tabs](#real-tabs-2026-11-18)).
+2. **Tempo DP** (`tempo_dp`), the coarse stage. State at each bar boundary = (instant on a 25 ms grid, tempo ratio in 1.5% steps, ±35% around the written tempo). Each bar lasts its nominal length × the ratio. The tempo can change by up to ±3 steps (±4.5%) per bar at almost no cost (0.002 × steps²). A larger change (section change) costs 1.0. Emission = cosine between the tab chroma (16 instants per bar) and the audio CQT chroma, minus its mean over the whole audio. Unsmoothed chroma. The lag of the audio chroma relative to the attack (160 ms) is compensated at the end. Constraint: no note before the audio starts sounding. Empty bars at the ends extend the tempo of the ends.
    - This way it cannot skip cycles of repeated chords: to gain a cycle it would have to speed up unrealistically.
    - The **fine grid is essential**: with 100 ms frames, a 1.6 s bar could only change its duration in steps of ~6%, and the tempo model parameters did nothing.
    - The useful model is the **band limit** plus the section jump, not the quadratic penalty: with more rigidity (0.02–1.0), songs with variable tempo get worse.
@@ -19,6 +19,7 @@ Deployed for testing: `rsMetalMaste_v2_p.psarc` and `rsTheWhSeven_v7_p.psarc`.
    **Tail cut** (the recording ends before the tab, e.g. a fade-out over a written ending): the tempo DP may stop at a bar boundary within 3 s of the audio end, in the second half of the tab, at 0.1 per dropped bar with notes and dropping at least 4 of them. Without it, the end constraint squeezes the whole second half of the song. The fine step and the intermediate stage give the dropped bars no emission, `tail_cut_bar` goes in `bar_times.json`, RsBuild leaves those bars out and the report warns about it.
    Also: no note after the end of the audio, and frames more than 50 dB below the maximum have no chroma (normalized background noise looked like anything).
 5. Start constraint in the fine step too, with a **finite penalty**. With `inf`, if no shift satisfied it, all costs were `inf` and `argmin` returned index 0: the whole song was shifted −2.5 beats.
+6. **Key check**, around the coarse stage: a tab written in another key than the recording is aligned transposed, and so is a track written in another key than the rest of the tab (see [Tab in another key](#tab-in-another-key-2026-11-18)).
 
 Results of the previous method (DTW + smoothing; 10 s windows against Nacholede): new tab → median 10 ms, 0% of windows > 300 ms. Old tab → median 20 ms, 27% > 300 ms (in the parts where the tab does not match the recording). Seven Nation Army: matches the validated grid (11 ms) except at the end, where the hybrid gets the end of the music right (235 s versus 230 s).
 
@@ -270,3 +271,134 @@ What it does not catch:
 False alarms are noisy stretches where the alignment is right anyway (All That Remains bars 17–23 and 103–108, error < 0.1 beat).
 
 The plan's stage B, transcribing the guitar stem to count the matching notes, was not done. It needs Demucs and Basic Pitch.
+
+## Real tabs (2026-11-18)
+
+The benchmark builds its tab from the official chart, so tab and recording always match bar by bar. `bench/real_tabs.py` aligns real Guitar Pro tabs of 12 of those songs and measures them against the same charts.
+
+- **Tabs:** in `samples/bench/<source>/` (not in the repo), matched to a benchmark song by the title in the file name. Two sources:
+  - `gprotab`: 15 public tabs of 10 songs, several versions of some.
+  - `songsterr`: 13 tabs of the 12 songs. One is a transcription of the Rocksmith chart (Disturbed).
+- **Measure:** the tab's notes at their aligned times against the chart's notes (Lead, Rhythm and Bass), in 10 s windows.
+  - Each window gets the shift (up to ±3 s) that matches the most chart notes with a tab note of the same pitch within ±40 ms.
+  - Among the shifts that reach 90 % of the best count, the nearest to zero is taken: inside a riff that repeats, one cycle away matches as well as in place.
+  - A window is **reliable** if at least 30 % of the chart's notes match. Otherwise the tab lacks that part, writes it differently, or is more than 3 s away.
+  - A window is **off** if its error is over ½ beat. A tab is **good** with < 5 % of its reliable windows off and ≥ 80 % of its windows reliable.
+- **Commands:** `inspect` (bars, written length, key and tempos against the chart), `run` (align and measure) and `report` (measure a saved run again). Each run keeps its files in `build/bench/real/<tag>/`.
+
+What the tabs are like (27 of the 28 load; alphaTab fails on `machine-head-davidian.gp3`):
+- **`songsterr`:** all complete and in the recording's key, and all but the Rocksmith transcription have drums.
+- **`gprotab`:** 3 cover only part of the song (Yes: 65 s of 368), 2 are in another key (Disturbed, +2 and −1 semitones), one mixes two keys (Dream Theater: the guitar in key, the bass and the keyboards half a step down), and the written tempo is up to 8 % off.
+
+### The harmony DTW broke the tempo search
+
+`chroma_warp` gave `tempo_dp` a global tempo ratio, and `tempo_dp` searched ±35 % around it. On riffs over a single note the DTW collapsed whole stretches of the tab:
+
+| Tab | Ratio from the DTW | Real ratio |
+|---|---|---|
+| Machine Head (`songsterr`) | 0.61 | 0.99 |
+| Machine Head (`gprotab`) | 0.28 | 0.96 |
+| Disturbed (`gprotab`, 4 tabs) | 0.05 to 0.67 | 1.00 in the two that are in key |
+
+The real tempo was outside the search range, so the tab ended up squeezed into part of the audio, with up to 5 gaps.
+
+The benchmark could not see it. With its tabs the DTW gave exactly 1.000 in 46 of the 48 songs, and it was wrong in the other two (Machine Head 0.937 for a real 0.992, Third Eye Blind 0.974 for a real 1.000). Its frames are 100 ms, so over a 2 s bar it only tells 1.00 from 0.95 or 1.05.
+
+**Change:** `chroma_warp` is removed and `tempo_dp` searches ±35 % around the tab's written tempo. A written tempo 8 % off is still found (Oasis from `gprotab`: ratio 0.92, 26 of 26 windows right).
+
+| Source (10 s windows) | Before | After |
+|---|---|---|
+| `songsterr` (13 tabs, 369 windows) | 87 % right, 3.3 % off, 9.8 % unreliable, 9 good tabs | **93.8 % right, 2.2 % off, 4.1 % unreliable, 10 good tabs** |
+| `gprotab` (14 tabs, 405 windows) | 48 % right, 7.2 % off, 44.7 % unreliable, 2 good tabs | **63.5 % right, 2.2 % off, 34.3 % unreliable, 4 good tabs** |
+
+- Only 6 tabs change. Both Machine Head tabs and one Disturbed tab become good. Another Disturbed tab goes from 9 to 21 reliable windows of 27, none off. The two transposed Disturbed tabs keep failing.
+- The transposed tabs now end with `chroma_match` 0.019 and 0.024, under the 0.025 of the different-song warning. Before, one of them ended at 0.071 with a median tempo ratio of 0.03.
+- Benchmark: dev and validation are identical song by song to the previous results (2.8 % / 22 good, 1.8 % / 10 good). So is validation_v2 against the old code run on the same machine (2.5 % / 10 good), except Third Eye Blind: median 10 → 14 ms and bars off by more than 50 ms 33 % → 41 %, none off by more than ½ beat either way.
+- MoP is identical window by window (10 ms, 0 % > 100 ms).
+- The old DTW crashed with 7 s or more of digital silence inside the audio (NaN in its cost matrix). `align_hybrid` now aligns Seven Nation Army with 10 s of silence written over its middle: outside the silence the bars move by at most 40 ms.
+
+### What the two benchmarks disagree on
+
+The fixed-tempo tab of `bench/run.py` is not always the easier case:
+- **Yes:** 49.8 % of bars off with the benchmark tab, no window off with the `songsterr` tab (35 of 38 reliable). The real tab writes the tempo change (130 → 152 BPM) and the benchmark tab has one tempo for the whole song. That is the likely reason; it was not checked.
+- **Machine Head:** 0.6 % with the benchmark tab, a total failure with both real tabs before this change.
+
+### Remaining failures with complete tabs (`songsterr`)
+
+- **Audioslave:** the first 5 bars are 1.2 s late (the first chord is at 15.46 s and lands at 16.62 s). The three Audioslave tabs fail the same way.
+- **Spinal Tap:** the free-tempo intro. The bar starts are right and the notes inside the bars are up to 0.9 s late.
+- **Joy Division:** the last ~10 bars are 1 s early.
+- **One window each:** Disturbed (Rocksmith transcription), 2.7 s early at 4:40; All That Remains, 140 ms early at 2:10.
+
+The doubtful-bars warning flags the first three (Audioslave bars 1–5, Spinal Tap 1–6, Joy Division 111–121).
+
+With `gprotab`, most of what is left comes from the tabs: partial ones (Yes, Spinal Tap) and another key (Disturbed, and the bass and keyboards of Dream Theater; see [Tab in another key](#tab-in-another-key-2026-11-18)). Joy Division has long stretches of unreliable windows that were not looked at.
+
+## Tab in another key (2026-11-18)
+
+A tab can be written for another tuning than the recording: E standard for a song recorded half a step down, a capo left out, Drop B for a song in Drop C#. The frets are right and every pitch is off by the same interval, so the chroma of the tab matches nothing in the audio. Two `gprotab` tabs of Disturbed are like that (the recording sounds 2 semitones above one and 1 below the other): neither had a single reliable window.
+
+### The whole tab
+
+Two steps, `align.key_candidates` and then the coarse stage of `align_hybrid`:
+1. **Proposal:** the pitch-class profile of the whole tab is correlated with the mean chroma of the audio over the 12 rotations. The rotations that beat no rotation by more than 0.1 are candidates, at most 3. It needs no alignment.
+2. **Confirmation:** the coarse stage runs with the tab as written and with each candidate. A candidate wins if its chroma match (mean per bar) is at least 1.2 × the match as written, at least 0.03, and the best.
+
+The rest of the alignment uses the transposed tab. `bar_times.json` gets `key_shift`: the semitones the recording sounds above the tab.
+
+Why two steps:
+- **The profile alone is wrong too often.** A fifth away shares most notes, and a tab that covers part of the song has another profile than the whole recording. Of 72 tab and recording pairs in the same key (the 48 benchmark songs and 24 real tabs), 4 correlate best at another rotation and 2 pass the 0.1 margin (the partial Spinal Tap tab at +2, Norah Jones at +5).
+- **The coarse stage alone is too slow:** 12 coarse alignments instead of 1. With the proposal, 70 of those 72 pairs run a single one, as before.
+- **The proposal rarely misses.** With the profiles of those 72 tabs rotated by ±1, ±2 and ±3 semitones, the right key is among the candidates in 431 of 432 cases.
+- **The coarse stage tells the keys apart.** On 27 pairs in the same key, 77 coarse alignments in a wrong key reached at most 0.79 × the match of the right one. The match of those 27 as written was never under 0.035 (median 0.084). The two transposed tabs reach 3.04 × (0.022 → 0.067) and 1.98 × (0.025 → 0.049).
+
+### One track
+
+The Dream Theater tab from `gprotab` mixes two keys: the guitar is in the key of the recording, and the bass and the three keyboard tracks are written half a step down. The whole-tab check followed the majority (+1) and left the guitar a semitone off: 15 reliable windows of 50, against 38 with no key check at all.
+
+`align.track_keys` checks each pitched track on its own after the coarse stage:
+- With the coarse bar starts fixed, the track alone is matched to the audio: the chroma emission of the coarse stage, averaged over the bars where the track has notes.
+- It is matched as it is, moved by ±1 and ±2 semitones, and moved back to how it was written when the whole tab was transposed.
+- The track moves if the best of those is at least 2 × the match as it is, and at least 0.03.
+- A track with notes in fewer than 16 bars, or in less than a third of the bars with notes, stays with the tab. So does the only pitched track of a tab.
+- If a track moves, the coarse stage runs again with every track in the key of the recording. `bar_times.json` gets `track_key_shifts`: the shift of each pitched track.
+
+Measured on the 26 real tabs with two or more pitched tracks (123 tracks), each track against the audio at the final alignment:
+- 88 tracks pass the two size limits. Only one meets the rule: the Dream Theater guitar, 0.010 as aligned and 0.045 as written (4.4 ×). The other tracks of that tab reach at most 0.26 × when moved.
+- For the other 87, the best move reaches 0.31 × the match in place (median), 0.50 × (90 % of them) and 0.93 × at most.
+- Without the one-third limit there are 109 tracks in the right key, and three sparse ones come close to the rule: 1.98 × (Oasis: 21 notes in 20 of 117 bars), 1.70 × and 1.27 ×. Only the 0.03 floor stopped them (0.025 to 0.029). A wrong move retunes an arrangement and a missed one leaves the tab as it was, so those tracks are left out.
+- From the same numbers, a track written 1 or 2 semitones off would be found in 327 of 348 cases (94 %).
+
+Tried and discarded: comparing each track with the rest of the tab, without the audio (cosine of the chroma per frame against the tracks with more notes). A melody or a sparse track in the right key scores like one in the wrong key (ratios up to 2.28).
+
+### Results
+
+| Source (10 s windows) | Before | After |
+|---|---|---|
+| `songsterr` (13 tabs, 369 windows) | 93.8 % right, 2.2 % off, 4.1 % unreliable, 10 good tabs | the same, tab by tab |
+| `gprotab` (14 tabs, 405 windows) | 63.5 % right, 2.2 % off, 34.3 % unreliable, 4 good tabs | **72.3 % right, 3.5 % off, 24.2 % unreliable, 5 good tabs** |
+
+- Three tabs change:
+  - **Disturbed** (`.gp4`, +2): 0 → 21 reliable windows of 27, median 5 ms, none off.
+  - **Disturbed** (`_8.gp3`, −1): 0 → 12 of 27, 5 of them off. It has a single track and covers part of the song. Those 5 are the new off windows of the table.
+  - **Dream Theater** (+1, the guitar stays): 38 → 46 of 50, none off. It becomes a good tab.
+- Benchmark: the three sets are identical song by song (dev 2.8 % / 22 good, validation 1.8 % / 10 good, validation_v2 2.5 % / 10 good). MoP is identical window by window.
+- The 13 `songsterr` tabs moved up a semitone before aligning: all 13 are found (−1) and every tab gets the same windows as untransposed.
+- One track of each `songsterr` tab moved before aligning (the pitched track with the second most notes): found in 11 of 13 moved down a semitone and in 12 of 13 moved up two. Where it is found, the tab gets the same windows as untransposed.
+  - **Yes** is missed both times: the track has notes in 23 % of the bars, under the one-third limit. Moved down, it costs one window off.
+  - **Joy Division** is missed moved down a semitone: the track matches 1.7 × better where it belongs, under the 2 × of the rule. Its windows stay the same.
+
+### Tuning of the arrangements
+
+A transposed tab still has the right frets, for another tuning. The build (`RsBuild`) adds the shift of each arrangement's track to its tuning and keeps strings and frets, and the report says so:
+- **Disturbed** (`.gp4`): written in Drop B, built in Drop C#, the tuning of the official chart.
+- **Dream Theater:** the guitar stays in E standard and the bass, written half a step down, is built in E standard. The official Lead and Bass are both in E standard.
+- `--keep-tuning` (`keep_tuning` in the pipeline, `--key-shift 0` in `RsBuild`) builds with the tab's tuning. The report then warns that the arrangement will sound off against the recording.
+
+### Not covered
+
+- **Sync points:** a Guitar Pro 8 tab timed by its sync points is not checked. Only `align_hybrid` looks at the key.
+- **Recordings between two semitones** (tape speed, a reference other than 440 Hz): the shift is a whole number of semitones.
+- **Sparse tracks** (a solo guitar that plays in a fifth of the song) follow the key of the tab.
+- **A partial tab in another key** is found but still aligns badly (Disturbed `_8`).
+- **The web app** has no switch for `--keep-tuning`.

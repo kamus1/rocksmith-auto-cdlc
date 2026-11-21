@@ -24,7 +24,8 @@ def cmd_build(a: argparse.Namespace) -> None:
         audio=Path(a.audio) if a.audio else None, tab=Path(a.tab), timing=a.timing, lead=a.lead, rhythm=a.rhythm, no_rhythm=a.no_rhythm,
         bass=a.bass, no_bass=a.no_bass,
         artist=a.artist, title=a.title, album=a.album, year=a.year, cover=a.cover, tone=a.tone,
-        name=a.name, variant=a.variant, pad=a.pad, deploy=not a.no_deploy, lookup=not a.no_lookup)
+        name=a.name, variant=a.variant, pad=a.pad, deploy=not a.no_deploy, lookup=not a.no_lookup,
+        keep_tuning=a.keep_tuning)
     pipeline.build_song(opts, on_step=lambda n, title: print(f"[{n}/{pipeline.STEPS}] {title}", flush=True),
                         on_log=lambda line: print(f"      {line}", flush=True))
 
@@ -92,6 +93,8 @@ def main(argv: list[str] | None = None) -> None:
     b.add_argument("--name", help="folder name in build/")
     b.add_argument("--variant", help="variant: goes in the title and coexists with the normal version (e.g. \"Lead Guitar 1\")")
     b.add_argument("--pad", type=float, default=4.0, help="seconds of silence at the start (count-in)")
+    b.add_argument("--keep-tuning", action="store_true",
+                   help="keep the tab's tuning when the recording sounds in another key (default: move it to match)")
     b.add_argument("--no-deploy", action="store_true", help="do not copy to the game's dlc folder")
     b.add_argument("--no-lookup", action="store_true", help="do not look up album, year and cover on iTunes")
     b.set_defaults(func=cmd_build)
