@@ -369,17 +369,22 @@ def lookup_song(artist: str, title: str, on_log: Callable[[str], None] = print) 
     import urllib.parse
     import urllib.request
 
-    query = urllib.parse.urlencode({"term": f"{artist} {title}", "entity": "song", "limit": 10})
+    # Accents folded and parentheses left out: "Post Crucifixión" is "Post-Crucifixion" in some albums,
+    # and "(Live)" or "(Remastered)" on either side should not stop a match
+    base = lambda s: re.sub(r"[\(\[][^\)\]]*[\)\]]", " ", s or "")
+    norm = lambda s: re.sub(r"[^a-z0-9]", "", unicodedata.normalize("NFKD", s or "").encode("ascii", "ignore").decode().lower())
+    query = urllib.parse.urlencode({"term": f"{artist} {base(title).strip() or title}", "entity": "song", "limit": 10})
     try:
         with urllib.request.urlopen(f"https://itunes.apple.com/search?{query}", timeout=10) as resp:
             results = json.loads(resp.read().decode("utf-8")).get("results", [])
     except OSError as e:
         on_log(f"(cannot reach iTunes: {e})")
         return {}
-    norm = lambda s: re.sub(r"[^a-z0-9]", "", (s or "").lower())
-    for r in results:
-        if norm(r.get("artistName")) == norm(artist) and norm(title) in norm(r.get("trackName")):
-            return {
+    want = norm(base(title)) or norm(title)
+    same_artist = [r for r in results if norm(r.get("artistName")) == norm(artist)]
+    exact = [r for r in same_artist if norm(base(r.get("trackName"))) == want]
+    for r in exact or [r for r in same_artist if want in norm(r.get("trackName"))]:
+        return {
                 "album": r.get("collectionName"),
                 "year": int(r["releaseDate"][:4]) if r.get("releaseDate") else None,
                 "cover_url": (r.get("artworkUrl100") or "").replace("100x100bb", "600x600bb") or None,
@@ -439,9 +444,16 @@ def extract_backing_track(tab: Path, out_base: Path) -> Path:
     return Path(rsbuild("backing-track", str(tab), str(out_base)).strip().splitlines()[-1])
 
 
+# The version tag tab sites add to the title: "Post Crucifixión (Ver 3)", "(ver 7 by someone)"
+TAB_VERSION = re.compile(r"\s*[\(\[]\s*ver(?:sion)?\.?\s*\d+[^\)\]]*[\)\]]\s*$", re.IGNORECASE)
+
+
 def inspect_tab(tab: Path) -> dict:
-    """The tab's tracks and metadata (RsBuild inspect-json)."""
-    return json.loads(rsbuild("inspect-json", str(Path(tab).resolve())))
+    """The tab's tracks and metadata (RsBuild inspect-json), without a tab site's version tag in the title."""
+    info = json.loads(rsbuild("inspect-json", str(Path(tab).resolve())))
+    if info.get("title"):
+        info["title"] = TAB_VERSION.sub("", info["title"]).strip() or info["title"]
+    return info
 
 
 def build_tones(dlc: Path | None = None) -> str:
