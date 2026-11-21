@@ -97,7 +97,8 @@ let inspect (path: string) =
             printfn "  Track %d: %-28s strings=%d tuning=[%s] capo=%d notes=%d" (int t.Index) t.Name st.StringTuning.Tunings.Count tuning (int st.Capo) notes
 
 /// Exports the tab's nominal timeline (written tempo) to JSON:
-/// start of each bar in playback order and the notes [ms; duration; midi (-1 = drums); track].
+/// start of each bar in playback order, the notes [ms; duration; midi (-1 = drums); track] and the
+/// notes that keep sounding without a new attack (held), in the same form.
 let exportTimeline (path: string) (outJson: string) =
     let s = load path
     let order = playbackOrder s
@@ -126,7 +127,7 @@ let exportTimeline (path: string) (outJson: string) =
                                 if n.IsTieDestination && not n.IsDead && not isDrums then
                                     let tMs = starts[k] + durs[k] * b.PlaybackStart / barTicks
                                     let dMs = durs[k] * b.PlaybackDuration / barTicks
-                                    held.Add [| tMs; dMs; float (n.CalculateRealValue(true, true)) |]
+                                    held.Add [| tMs; dMs; float (n.CalculateRealValue(true, true)); float t.Index |]
                                 if not n.IsTieDestination && not n.IsDead then
                                     let tMs = starts[k] + durs[k] * b.PlaybackStart / barTicks
                                     let dMs0 = durs[k] * b.PlaybackDuration / barTicks
@@ -141,7 +142,7 @@ let exportTimeline (path: string) (outJson: string) =
                                                 let a = at (float pts[i].Offset)
                                                 let e = if i + 1 < pts.Length then at (float pts[i + 1].Offset) else tMs + dMs0
                                                 if pts[i].Value > 0 && e > a then
-                                                    held.Add [| a; e - a; baseMidi + System.Math.Round(float pts[i].Value / 2.0) |]
+                                                    held.Add [| a; e - a; baseMidi + System.Math.Round(float pts[i].Value / 2.0); float t.Index |]
                                             match pts |> Array.tryFind (fun p -> p.Value > 0) with
                                             | Some p -> dMs0 * float p.Offset / 60.0
                                             | None -> dMs0

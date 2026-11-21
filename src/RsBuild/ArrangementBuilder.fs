@@ -182,8 +182,10 @@ type BuildResult =
 /// Builds the arrangement from a tab track and the time of each bar.
 /// barEnds[k] is the actual end of bar k: equal to barTimes[k + 1] unless a gap follows (audio
 /// not in the tab), which is left without notes and with beats at the same tempo.
+/// keyShift: semitones the recording sounds above the tab (a tab written for another tuning). The
+/// tuning moves by it and the frets stay, so the arrangement sounds like the recording.
 let build (score: Score) (trackIndex: int) (kind: ArrangementKind) (order: int list) (barTimes: BarTimes) (barEnds: float[])
-          (songLengthMs: int) : BuildResult =
+          (songLengthMs: int) (keyShift: int) : BuildResult =
     let staff = score.Tracks[trackIndex].Staves[0]
     let warnings = ResizeArray<string>()
     match kind, staff.StringTuning.Tunings.Count with
@@ -193,6 +195,7 @@ let build (score: Score) (trackIndex: int) (kind: ArrangementKind) (order: int l
     | _, 4 -> warnings.Add "4-string track (bass): played on the guitar's 4 low strings, one octave up."
     | _, n -> warnings.Add $"The track has {n} strings; only 6 are used."
     let place, openPitches = stringLayout staff kind
+    let openPitches = openPitches |> Array.map (fun p -> p + keyShift)
     let placed (n: AlphaTab.Model.Note) = place (int n.String) (int n.Fret)
     let mutable dropped = 0
 
@@ -351,7 +354,7 @@ let build (score: Score) (trackIndex: int) (kind: ArrangementKind) (order: int l
     let offs =
         match kind with
         | Bass -> Array.init 6 (fun i -> if i < 4 && i < openPitches.Length then int16 (openPitches[i] - bassStandardMidi[i]) else 0s)
-        | _ -> tuningOffsets staff
+        | _ -> tuningOffsets staff |> Array.map (fun o -> o + int16 keyShift)
     md.Tuning.SetTuning(offs[0], offs[1], offs[2], offs[3], offs[4], offs[5])
     let barsMs = barTimes[barTimes.Length - 1] - barTimes[0]
     let beats = order |> List.sumBy (fun i -> float score.MasterBars[i].TimeSignatureNumerator)

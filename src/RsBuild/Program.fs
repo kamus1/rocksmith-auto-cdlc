@@ -3,16 +3,17 @@ module RsBuild.Program
 open System
 open System.IO
 
-/// Tab → Rocksmith XML with the given bar times. toneKeys: sound category → tone key;
+/// Tab → Rocksmith XML with the given bar times (and the key shift that goes with them for the track:
+/// semitones the recording sounds above it, which the tuning follows). toneKeys: sound category → tone key;
 /// if the track changes sound and there are tones for it, writes the tone changes. Returns the arrangement,
 /// the report lines and the tone keys used (the first one is the base).
-let tabToXml (tab: string) (track: int) (kind: ArrangementBuilder.ArrangementKind) (barTimes: AlphaTab.Model.Score -> int list -> float[] * float[] * string list)
+let tabToXml (tab: string) (track: int) (kind: ArrangementBuilder.ArrangementKind) (barTimes: AlphaTab.Model.Score -> int list -> int -> float[] * float[] * string list * int)
              (songLengthMs: int) (outXml: string) (toneKeys: Map<string, string>) =
     let score = GpImport.load tab
-    let times, ends, timingNotes = barTimes score (GpImport.playbackOrder score)
+    let times, ends, timingNotes, keyShift = barTimes score (GpImport.playbackOrder score) track
     // Fewer bar times than bars: the recording ends before the tab and the rest is left out
     let order = GpImport.playbackOrder score |> List.truncate (times.Length - 1)
-    let r = ArrangementBuilder.build score track kind order times ends songLengthMs
+    let r = ArrangementBuilder.build score track kind order times ends songLengthMs keyShift
     let arr = r.Arrangement
     let segs =
         GpImport.toneSegments score track order
@@ -63,6 +64,7 @@ let private usage () =
     eprintfn "                [--tones-lead \"clean=J|distortion=J\"] [--tones-rhythm ...]   (one tone per track sound)"
     eprintfn "                [--dlc-dir D]   (next version after those in D, in the title and file name)"
     eprintfn "                [--variant V]   (variant: goes in the title and key, coexists with the normal version)"
+    eprintfn "                [--key-shift N] (semitones added to the tuning; default: the shift in the bar times, 0 keeps the tab's)"
     eprintfn "                --wem-cmd \"python external/wem-encoder/wav2wem.py\"   (wav → wem command)"
     eprintfn "  RsBuild tones <dlc_folder> <out_dir>     (extracts guitar tones from the .psarc files)"
     eprintfn "  RsBuild pack <project.rs2dlc> <out_without_extension>"
@@ -104,9 +106,9 @@ let main argv =
         GpImport.exportTimeline (Path.GetFullPath tab) (Path.GetFullPath outJson)
         0
     | [| "xml"; tab; track; offsetMs; songLengthMs; outXml |] ->
-        let timing score order =
+        let timing score order _ =
             let t = ArrangementBuilder.barTimesFromTempo score order (float offsetMs)
-            t, t[1..], []
+            t, t[1..], [], 0
         let _, _, report, _ = tabToXml (Path.GetFullPath tab) (int track) ArrangementBuilder.Lead timing (int songLengthMs) (Path.GetFullPath outXml) Map.empty
         report |> List.iter (printfn "%s")
         0
@@ -140,8 +142,10 @@ let main argv =
             use r = new NAudio.Wave.WaveFileReader(wav)
             int r.TotalTime.TotalMilliseconds
         let barTimesJson = Path.GetFullPath(req "bar-times")
-        let timing _ _ =
-            let times, ends, suspicious, cut = Align.loadBarTimes barTimesJson
+        let timing _ _ (track: int) =
+            let times, ends, suspicious, cut, found, byTrack = Align.loadBarTimes barTimesJson
+            // --key-shift overrides the shift found by the alignment (0: keep the tab's tuning)
+            let keyShift = a.TryFind "key-shift" |> Option.map int |> Option.defaultValue (byTrack.TryFind track |> Option.defaultValue found)
             let dropped =
                 match cut with
                 | Some c when c >= 2 && c <= ends.Length ->
@@ -155,12 +159,17 @@ let main argv =
                 [ for k in 0 .. ends.Length - 1 do
                       if times[k + 1] - ends[k] > 1.0 then
                           yield $"ALIGNMENT: {(times[k + 1] - ends[k]) / 1000.0:F1} s of audio not in the tab before bar {k + 2} (left without notes)" ]
+            let key =
+                if keyShift = 0 then []
+                else
+                    let n = abs keyShift
+                    [ $"""KEY: tuning moved {n} semitone{(if n > 1 then "s" else "")} {(if keyShift > 0 then "up" else "down")} to match the recording (same frets)""" ]
             let notes =
-                dropped @ gaps @
+                key @ dropped @ gaps @
                 (if suspicious.IsEmpty then []
                  else [ $"ALIGNMENT: {suspicious.Length} bars with tempo >10%% off the median: " +
                         (suspicious |> List.truncate 30 |> List.map (sprintf "b%d") |> String.concat ", ") ])
-            times, ends, notes
+            times, ends, notes, keyShift
         let tab = Path.GetFullPath(req "tab")
         let parts =
             [ yield ArrangementBuilder.Lead, int (req "lead")

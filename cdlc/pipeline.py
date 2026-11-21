@@ -496,6 +496,7 @@ class BuildOptions:
     pad: float = 4.0                    # seconds of silence at the start (count-in)
     timing: str = "auto"                # bar times: auto (GP8 sync points if usable, else align),
                                         # sync-points or align
+    keep_tuning: bool = False           # keep the tab's tuning even if the recording sounds in another key
     deploy: bool = True
     lookup: bool = True                 # album, year and cover from iTunes
 
@@ -643,6 +644,24 @@ def build_song(opts: BuildOptions, on_step: Callable[[int, str], None] = lambda 
             ([f"{odd:.0%} of bars off-tempo"] if odd > 0.5 else [])
     if signs:
         warnings.append(f"The tab may not match the audio ({', '.join(signs)}). Check they are the same song.")
+    # Key of each arrangement's track against the recording (a track can differ from the rest of the tab)
+    by_track = r.get("track_key_shifts") or {}
+    shifts = {name: by_track.get(str(idx), r.get("key_shift", 0))
+              for name, idx in (("Lead", lead), ("Rhythm", rhythm), ("Bass", bass)) if idx is not None}
+    moved = {name: k for name, k in shifts.items() if k}
+    if moved:
+        semitones = lambda k: f"{abs(k)} semitone{'s' if abs(k) > 1 else ''}"
+        if len(set(shifts.values())) == 1:
+            key = next(iter(moved.values()))
+            where = f"The recording sounds {semitones(key)} {'above' if key > 0 else 'below'} the tab (another tuning or a capo?). "
+            kept = f"The tab's tuning was kept: played along with the recording it will sound {semitones(key)} off."
+            done = f"The tuning was moved {semitones(key)} {'up' if key > 0 else 'down'} to match, with the same frets: "
+        else:
+            where = ("The tracks of the tab are not written in the same key: the recording sounds "
+                     + ", ".join(f"{semitones(k)} {'above' if k > 0 else 'below'} the {name} track" for name, k in moved.items()) + ". ")
+            kept = "The tab's tunings were kept: played along with the recording those arrangements will sound off."
+            done = "Their tuning was moved to match, with the same frets: "
+        warnings.append(where + (kept if opts.keep_tuning else done + "tune as the game asks. To keep the tab's tuning, build with --keep-tuning."))
     if not synced and not any(n[2] < 0 for n in tl["notes"]):
         warnings.append("The tab has no drums: fine alignment may be less accurate.")
     for k, sec in r.get("gaps", []):
@@ -701,6 +720,8 @@ def build_song(opts: BuildOptions, on_step: Callable[[int, str], None] = lambda 
         args += ["--dlc-dir", str(dlc_dir())]        # next version after the game's ones, in the title
     if opts.variant:
         args += ["--variant", opts.variant]
+    if opts.keep_tuning:
+        args += ["--key-shift", "0"]
     for kind, chosen in per_track_tones.items():
         args += [f"--tones-{kind}", "|".join(f"{c}={p}" for c, p in chosen.items())]
     ensure_wem_encoder(on_log)

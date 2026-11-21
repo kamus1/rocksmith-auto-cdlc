@@ -2,12 +2,12 @@
 
 align_hybrid, in two stages (details and results in docs/ALIGNMENT.md):
   1. tempo_dp: dynamic programming over each bar's start with a plausible tempo model and a harmony
-     emission (tab chroma vs. audio chroma). chroma_warp (DTW) only provides the initial global
-     tempo.
+     emission (tab chroma vs. audio chroma), searching around the tab's written tempo.
   2. Fine step: each bar shifts up to ±2.5 beats around that curve, comparing per-band drum hits,
      guitar and bass onsets, and harmony over chunks of the bar.
-Discarded: beat_this's beat grid (skips or invents beats), chroma DTW as the alignment (skips
-cycles of repeated chords), and onsets without a tempo model (ambiguous on repetitive riffs).
+Discarded: beat_this's beat grid (skips or invents beats), chroma DTW both as the alignment (skips
+cycles of repeated chords) and as the global tempo estimate (on one-note riffs it gave 0.3 to 0.7 of
+the real tempo), and onsets without a tempo model (ambiguous on repetitive riffs).
 """
 
 import json
@@ -69,14 +69,14 @@ def count_in_bars(tl: dict) -> int:
 
 
 def _held(tl: dict, use_held: bool = True) -> list:
-    """Notes that sound without a new attack, [t_ms, d_ms, midi]: the stretched part of a bend and the
-    continuation of a tied or long note. They only count for chroma, not as onsets."""
+    """Notes that sound without a new attack, [t_ms, d_ms, midi] or [t_ms, d_ms, midi, track]: the stretched
+    part of a bend and the continuation of a tied or long note. They only count for chroma, not as onsets."""
     return tl.get("held", []) if use_held else []
 
 
 def _tab_chroma(tl: dict, n_frames: int, use_held: bool = True) -> np.ndarray:
     C = np.zeros((12, n_frames))
-    segments = [(t, d, m, True) for t, d, m, _tr in tl["notes"]] + [(t, d, m, False) for t, d, m in _held(tl, use_held)]
+    segments = [(t, d, m, True) for t, d, m, _tr in tl["notes"]] + [(t, d, m, False) for t, d, m, *_ in _held(tl, use_held)]
     for t_ms, d_ms, midi, attack in segments:
         if midi < 0:
             continue
@@ -89,50 +89,51 @@ def _tab_chroma(tl: dict, n_frames: int, use_held: bool = True) -> np.ndarray:
     return C
 
 
-def chroma_warp(tl: dict, y: np.ndarray, band_rad: float = 0.1) -> np.ndarray:
-    """Start (ms) of each bar from DTW between the tab chroma and the audio's CENS chroma.
+KEY_MARGIN = 0.1
+KEY_GAIN = 1.2
+KEY_MIN_MATCH = 0.03
+TRACK_GAIN = 2.0
+TRACK_MIN_BARS = 16
+TRACK_MIN_SHARE = 1 / 3
+TRACK_SHIFTS = (-2, -1, 1, 2)
 
-    Only the span with notes (first to last) is aligned: the empty bars at the edges (count-in,
-    ending) have nothing to match and would shift everything. Those bars are placed afterwards by
-    extending the tempo of the aligned edges.
+
+def _transposed(tl: dict, semitones: int, tracks: dict[int, int] | None = None) -> dict:
+    """The tab with its pitched notes moved by semitones, plus tracks[track] for the tracks listed
+    (drums, stored as negative MIDI, stay; a held note without a track only follows the tab)."""
+    extra = tracks or {}
+    out = dict(tl)
+    out["notes"] = [[t, d, m + semitones + extra.get(int(tr), 0) if m >= 0 else m, tr] for t, d, m, tr in tl["notes"]]
+    out["held"] = [[t, d, m + semitones + (extra.get(int(h[0]), 0) if h else 0), *h] for t, d, m, *h in tl.get("held", [])]
+    return out
+
+
+def key_candidates(tl: dict, y: np.ndarray, use_held: bool = True, margin: float = KEY_MARGIN, top: int = 3) -> list[int]:
+    """Key shifts worth trying: semitones (-5 to +6) the recording may sound above the tab.
+
+    Compares the pitch-class profile of the whole tab with the mean chroma of the audio over the 12
+    rotations, and returns the (at most `top`) rotations that correlate better than no rotation by
+    more than `margin`. Almost always none. It is only a proposal: a fifth away shares most notes and
+    often wins on a tab in the right key, and so does any rotation when the tab covers part of the
+    song. align_hybrid confirms a candidate with the coarse alignment.
     """
     import librosa
 
-    st = np.array(tl["bar_starts_ms"])
-    pitched = [(n[0], n[0] + max(n[1], 1)) for n in tl["notes"] if n[2] >= 0] or [(n[0], n[0] + 1) for n in tl["notes"]]
-    t_first = min(a for a, _ in pitched)
-    t_last = max(b for _, b in pitched)
-    f0 = int(t_first / 1000 / HOP_CHROMA_S)
-    f1 = int(t_last / 1000 / HOP_CHROMA_S) + 1
-    X = np.log1p(_tab_chroma(tl, f1)[:, f0:f1] * 10)
-    X = librosa.util.normalize(X, norm=2, axis=0, fill=True)
-    _, (s0, s1) = librosa.effects.trim(y, top_db=40)
     hop = int(round(HOP_CHROMA_S * SR))
-    Y = librosa.feature.chroma_cens(y=y[s0:s1], sr=SR, hop_length=hop)
-    _, wp = librosa.sequence.dtw(X=X, Y=Y, metric="cosine", backtrack=True,
-                                 global_constraints=True, band_rad=band_rad)
-    wp = wp[::-1]
-    n_tab = f1 - f0
-    t2a = np.full(n_tab, np.nan)
-    for i in range(n_tab):
-        js = wp[wp[:, 0] == i, 1]
-        if len(js):
-            t2a[i] = np.median(js) * HOP_CHROMA_S * 1000 + s0 / SR * 1000
-    idx = np.arange(n_tab)
-    ok = ~np.isnan(t2a)
-    t2a = np.maximum.accumulate(np.interp(idx, idx[ok], t2a[ok]))
-    # Tab (ms) → audio (ms) within the span with notes; outside it, the edge slopes are extended
-    tab_ms = (idx + f0) * HOP_CHROMA_S * 1000
-    edge = max(2, n_tab // 10)
-    slope_a = (t2a[edge] - t2a[0]) / max(tab_ms[edge] - tab_ms[0], 1)
-    slope_b = (t2a[-1] - t2a[-1 - edge]) / max(tab_ms[-1] - tab_ms[-1 - edge], 1)
-    out = np.interp(st, tab_ms, t2a)
-    out = np.where(st < tab_ms[0], t2a[0] + (st - tab_ms[0]) * slope_a, out)
-    out = np.where(st > tab_ms[-1], t2a[-1] + (st - tab_ms[-1]) * slope_b, out)
-    return np.maximum.accumulate(out)
+    Y = np.log1p(librosa.feature.chroma_cqt(y=y, sr=SR, hop_length=hop) * 10)
+    rms = librosa.feature.rms(y=y, hop_length=hop)[0][:Y.shape[1]]
+    sounding = 20 * np.log10(rms / (rms.max() + 1e-12) + 1e-12) >= -50
+    audio = Y[:, :len(rms)][:, sounding].mean(axis=1)
+    tab = _tab_chroma(tl, int(tl["bar_starts_ms"][-1] / (HOP_CHROMA_S * 1000)) + 2, use_held).sum(axis=1)
+    if not tab.any() or not sounding.any():
+        return []
+    z = lambda v: (v - v.mean()) / (v.std() + 1e-9)
+    corr = np.array([float(np.mean(z(np.roll(tab, k)) * z(audio))) for k in range(12)])
+    better = [k for k in np.argsort(-corr) if k != 0 and corr[k] > corr[0] + margin][:top]
+    return [int(k) if k <= 6 else int(k) - 12 for k in better]
 
 
-def tempo_dp(tl: dict, y: np.ndarray, T_guess: np.ndarray, ratio_span: float = 0.35, ratio_step: float = 0.015,
+def tempo_dp(tl: dict, y: np.ndarray, ratio_span: float = 0.35, ratio_step: float = 0.015,
              tempo_weight: float = 0.002, band: int = 3, jump_cost: float = 1.0, grid_ms: float = 25.0,
              samples: int = 16, start_ms: float = 0.0, chroma_lag_ms: float = 160.0,
              gap_cost: float | np.ndarray = 0.2, end_ms: float = np.inf, silence_db: float = -50.0,
@@ -146,7 +147,9 @@ def tempo_dp(tl: dict, y: np.ndarray, T_guess: np.ndarray, ratio_span: float = 0
     The emission is the chroma similarity (cosine) between tab and audio along the bar, minus its
     mean over the whole audio (what a random position would score). This way it cannot skip cycles
     of repeated chords: to gain a cycle it would have to speed up unrealistically.
-    T_guess (the DTW) only provides the global tempo ratio.
+    The ratios are searched within ±ratio_span of 1, the tab's written tempo. A chroma DTW used to
+    provide the centre of that range: on real tabs of one-note riffs it collapsed whole stretches and
+    gave 0.3 to 0.7 of the real tempo, which left the real one out of the range.
 
     The time grid has to be fine: with 100 ms frames, a 1.6 s bar can only change its duration in
     6% steps and the tempo model stops distinguishing anything.
@@ -182,10 +185,11 @@ def tempo_dp(tl: dict, y: np.ndarray, T_guess: np.ndarray, ratio_span: float = 0
         if 0 <= k < n and midi >= 0:
             has[k] = True
     if not has.any():
-        return T_guess, [], None
+        # Nothing to match by harmony: the written tempo, with the first hit at the audio start
+        return st + start_ms - min((nt[0] for nt in tl["notes"]), default=0.0), [], None
     # Bars with emission: with some attack or some note still sounding (bend, tie)
     emit = has.copy()
-    for t_ms, d_ms, midi in _held(tl, use_held):
+    for t_ms, d_ms, midi, *_ in _held(tl, use_held):
         if midi >= 0:
             a_, b_ = np.searchsorted(st, [t_ms, t_ms + max(d_ms, 1)], side="right") - 1
             emit[max(0, a_):min(n, b_ + 1)] = True
@@ -205,10 +209,8 @@ def tempo_dp(tl: dict, y: np.ndarray, T_guess: np.ndarray, ratio_span: float = 0
     fr = (pos - i0)[None, :]
     Y = librosa.util.normalize(Y[:, i0] * (1 - fr) + Y[:, i0 + 1] * fr, norm=2, axis=0, fill=False).astype(np.float32)
 
-    rel = np.diff(T_guess) / np.maximum(np.diff(st), 1)
-    r0 = float(np.median(rel[k0:k1]))
     n_r = int(round(np.log1p(ratio_span) / np.log1p(ratio_step)))
-    ratios = r0 * (1 + ratio_step) ** np.arange(-n_r, n_r + 1)
+    ratios = (1 + ratio_step) ** np.arange(-n_r, n_r + 1)
     R = len(ratios)
 
     def cells(ms: float, r: float) -> int:
@@ -323,6 +325,22 @@ def tempo_dp(tl: dict, y: np.ndarray, T_guess: np.ndarray, ratio_span: float = 0
     return T, sorted(gaps), cut
 
 
+def _audio_chroma_grid(y: np.ndarray, grid_ms: float = 25.0, silence_db: float = -50.0) -> np.ndarray:
+    """Audio chroma every grid_ms, each frame with norm 1 (zero where the audio is silent)."""
+    import librosa
+
+    hop_ms = HOP_CHROMA_S * 1000
+    hop = int(round(HOP_CHROMA_S * SR))
+    Y = np.log1p(librosa.feature.chroma_cqt(y=y, sr=SR, hop_length=hop) * 10)
+    rms = librosa.feature.rms(y=y, hop_length=hop)[0][:Y.shape[1]]
+    Y[:, :len(rms)][:, 20 * np.log10(rms / (rms.max() + 1e-12) + 1e-12) < silence_db] = 0
+    n_g = int((Y.shape[1] - 1) * hop_ms / grid_ms) + 1
+    pos = np.arange(n_g) * grid_ms / hop_ms
+    i0 = np.minimum(pos.astype(int), Y.shape[1] - 2)
+    fr = (pos - i0)[None, :]
+    return librosa.util.normalize(Y[:, i0] * (1 - fr) + Y[:, i0 + 1] * fr, norm=2, axis=0, fill=False)
+
+
 def chroma_curve_score(tl: dict, y: np.ndarray, T: np.ndarray, use_held: bool = True,
                        grid_ms: float = 25.0, chroma_lag_ms: float = 160.0, silence_db: float = -50.0,
                        bars: int | None = None, mean: bool = False) -> float:
@@ -337,15 +355,8 @@ def chroma_curve_score(tl: dict, y: np.ndarray, T: np.ndarray, use_held: bool = 
     hop_ms = HOP_CHROMA_S * 1000
     n_tab = int(st[-1] / hop_ms) + 2
     X = librosa.util.normalize(np.log1p(_tab_chroma(tl, n_tab, use_held) * 10), norm=2, axis=0, fill=False)
-    hop = int(round(HOP_CHROMA_S * SR))
-    Y = np.log1p(librosa.feature.chroma_cqt(y=y, sr=SR, hop_length=hop) * 10)
-    rms = librosa.feature.rms(y=y, hop_length=hop)[0][:Y.shape[1]]
-    Y[:, :len(rms)][:, 20 * np.log10(rms / (rms.max() + 1e-12) + 1e-12) < silence_db] = 0
-    n_g = int((Y.shape[1] - 1) * hop_ms / grid_ms) + 1
-    pos = np.arange(n_g) * grid_ms / hop_ms
-    i0 = np.minimum(pos.astype(int), Y.shape[1] - 2)
-    fr = (pos - i0)[None, :]
-    Y = librosa.util.normalize(Y[:, i0] * (1 - fr) + Y[:, i0 + 1] * fr, norm=2, axis=0, fill=False)
+    Y = _audio_chroma_grid(y, grid_ms, silence_db)
+    n_g = Y.shape[1]
     total, count = 0.0, 0
     for k in range(min(n, len(T) - 1, bars or n)):
         ts = st[k] + (st[k + 1] - st[k]) * np.arange(16) / 16
@@ -358,6 +369,57 @@ def chroma_curve_score(tl: dict, y: np.ndarray, T: np.ndarray, use_held: bool = 
         total += float(S[np.arange(16), np.clip(np.rint(at / grid_ms).astype(int), 0, n_g - 1)].mean())
         count += 1
     return total / max(count, 1) if mean else total
+
+
+def track_keys(tl: dict, y: np.ndarray, T: np.ndarray, bars: int | None = None, written: int = 0,
+               use_held: bool = True, gain: float = TRACK_GAIN, min_match: float = KEY_MIN_MATCH,
+               min_bars: int = TRACK_MIN_BARS, min_share: float = TRACK_MIN_SHARE, grid_ms: float = 25.0,
+               chroma_lag_ms: float = 160.0) -> dict[int, int]:
+    """Tracks written in another key than the rest of the tab: {track: semitones to move it by}.
+
+    A tab put together from several sources can have a guitar in standard tuning over a bass written half
+    a step down. With the bar starts T of the coarse stage fixed, each pitched track is matched to the
+    audio on its own (the emission of chroma_curve_score, mean per bar with notes of the track): as it
+    is, moved by TRACK_SHIFTS and moved by `written` (back to how it was written, when the tab was
+    transposed). It moves if that matches `gain` times better than as it is, and at least min_match.
+    With the alignment fixed, a track in the right key never came close to that (see docs/ALIGNMENT.md).
+    A track with notes in fewer than min_bars bars, or in less than min_share of the bars with notes,
+    stays with the tab: over few bars the match is too noisy to tell. So does a tab with one pitched
+    track: its key is the tab's.
+    """
+    import librosa
+
+    st = np.array(tl["bar_starts_ms"])
+    pitched = sorted({int(nt[3]) for nt in tl["notes"] if nt[2] >= 0})
+    n = min(len(st) - 1, len(T) - 1, bars or len(st) - 1)
+    if len(pitched) < 2 or n < 1:
+        return {}
+    hop_ms = HOP_CHROMA_S * 1000
+    n_tab = int(st[-1] / hop_ms) + 2
+    Y = _audio_chroma_grid(y, grid_ms)
+    # 16 points per bar, in the tab and in the audio. The emission of a tab frame x at the audio frame
+    # a is x·Y[a] minus its mean over the whole audio, x·mean(Y)
+    frac = np.arange(16) / 16
+    rows = np.clip(np.rint((st[:n, None] + np.diff(st[:n + 1])[:, None] * frac) / hop_ms).astype(int), 0, n_tab - 1)
+    at = T[:n, None] + np.diff(T[:n + 1])[:, None] * frac + chroma_lag_ms
+    D = Y[:, np.clip(np.rint(at / grid_ms).astype(int), 0, Y.shape[1] - 1)] - Y.mean(axis=1)[:, None, None]
+    options = sorted((set(TRACK_SHIFTS) | {written}) - {0})
+    chroma = {}
+    for tr in pitched:
+        own = dict(tl, notes=[nt for nt in tl["notes"] if nt[3] == tr and nt[2] >= 0],
+                   held=[h for h in tl.get("held", []) if len(h) > 3 and h[3] == tr])
+        chroma[tr] = librosa.util.normalize(np.log1p(_tab_chroma(own, n_tab, use_held) * 10), norm=2, axis=0, fill=False)[:, rows]
+    with_notes = np.any([X.any(axis=(0, 2)) for X in chroma.values()], axis=0).sum()
+    out = {}
+    for tr, X in chroma.items():
+        sounding = X.any(axis=(0, 2))
+        if sounding.sum() < max(min_bars, min_share * with_notes):
+            continue
+        match = {s: float((np.roll(X, s, axis=0) * D).sum(axis=0).mean(axis=1)[sounding].mean()) for s in [0] + options}
+        best = max(options, key=match.get)
+        if match[best] >= max(min_match, gain * match[0]):
+            out[tr] = best
+    return out
 
 
 def drum_envelopes(y: np.ndarray) -> tuple[dict, float]:
@@ -404,7 +466,7 @@ def _bar_part_chroma(tl: dict, st: np.ndarray, parts: int, use_held: bool = True
     An attack counts only in its own bar; a note that keeps sounding (held) counts in every bar it crosses."""
     n = len(st) - 1
     out = np.zeros((n, parts, 12))
-    segments = [(t, d, m, True) for t, d, m, _tr in tl["notes"]] + [(t, d, m, False) for t, d, m in _held(tl, use_held)]
+    segments = [(t, d, m, True) for t, d, m, _tr in tl["notes"]] + [(t, d, m, False) for t, d, m, *_ in _held(tl, use_held)]
     for t_ms, d_ms, midi, attack in segments:
         if midi < 0:
             continue
@@ -476,7 +538,8 @@ def align_hybrid(timeline_json: Path, wav: Path, out_json: Path, radius_beats: f
                  refine_weight: float = 1000.0, refine_radius_beats: float = 4.0, refine_max_ms: float = 2000.0,
                  refine_grid_ms: float = 40.0, refine_margin: float = 1.5, refine_chroma: float = 20.0,
                  tempo_params: dict | None = None, confidence_beats: float = 2.0,
-                 shift_emissions_out: Path | None = None) -> dict:
+                 shift_emissions_out: Path | None = None, detect_key: bool = True,
+                 key_gain: float = KEY_GAIN, key_min_match: float = KEY_MIN_MATCH) -> dict:
     """Hybrid alignment (see the module docstring and docs/ALIGNMENT.md)."""
     import librosa
 
@@ -488,6 +551,35 @@ def align_hybrid(timeline_json: Path, wav: Path, out_json: Path, radius_beats: f
         tl["notes"] = [nt for nt in tl["notes"] if nt[0] >= st[n_count_in]]
     n = len(lens)
     y, _ = librosa.load(str(wav), sr=SR, mono=True)
+    start_ms = audio_start_ms(wav)
+    end_ms = librosa.effects.trim(y, top_db=40)[1][1] / SR * 1000
+    tp = dict(start_ms=start_ms, end_ms=end_ms, use_held=use_held, **(tempo_params or {}))
+
+    # Tab written in another key than the recording (another tuning, a capo): with the tab as written the
+    # harmony matches nowhere and the alignment is noise. The pitch profiles propose shifts and the coarse
+    # stage confirms one: aligned in that key, the tab must match the audio key_gain times better than as
+    # written, and at least key_min_match (what tab and audio of the same song reach). From there on the
+    # tab is aligned transposed.
+    key = 0
+    candidates = key_candidates(tl, y, use_held) if detect_key else []
+    coarse = tempo_dp(tl, y, **tp)
+    if candidates:
+        match = written = chroma_curve_score(tl, y, coarse[0], use_held, bars=coarse[2], mean=True)
+        for semitones in candidates:
+            tl_k = _transposed(tl, semitones)
+            coarse_k = tempo_dp(tl_k, y, **tp)
+            match_k = chroma_curve_score(tl_k, y, coarse_k[0], use_held, bars=coarse_k[2], mean=True)
+            if match_k >= max(key_min_match, key_gain * written) and match_k > match:
+                key, coarse, match, tl_key = semitones, coarse_k, match_k, tl_k
+        if key:
+            tl = tl_key
+    # Tracks written in another key than the rest of the tab: each one is checked on its own at the
+    # coarse alignment, and the coarse stage is repeated with all the tracks in the key of the recording
+    pitched = sorted({int(nt[3]) for nt in tl["notes"] if nt[2] >= 0})
+    odd_tracks = track_keys(tl, y, coarse[0], coarse[2], -key, use_held) if detect_key else {}
+    if odd_tracks:
+        tl = _transposed(tl, 0, odd_tracks)
+        coarse = tempo_dp(tl, y, **tp)
 
     envs, step = drum_envelopes(y)
     # The envelope peak arrives a bit after the attack: compensate by shifting it back
@@ -642,18 +734,14 @@ def align_hybrid(timeline_json: Path, wav: Path, out_json: Path, radius_beats: f
     # proposed by the tempo DP). The fine step decides, since it also sees the onsets: chroma alone cannot
     # tell a chord being struck from one fading out, and in repetitive spans a gap can skip cycles.
     # Gaps are only accepted if they improve the fine cost by more than gap_select_margin each.
-    T_c = chroma_warp(tl, y)
-    start_ms = audio_start_ms(wav)
-    end_ms = librosa.effects.trim(y, top_db=40)[1][1] / SR * 1000
-    tp = dict(start_ms=start_ms, end_ms=end_ms, use_held=use_held, **(tempo_params or {}))
-    T_s, gaps, cut = tempo_dp(tl, y, T_c, **tp)
+    T_s, gaps, cut = coarse
     gap_ms = np.zeros(n)                                   # audio not in the tab after bar k
     for k, sec in gaps:
         gap_ms[k - 1] = sec * 1000
     T, off, score = fine(T_s, gap_ms, cut)
     score_nogap = None
     if gaps:
-        T_s0, _, cut0 = tempo_dp(tl, y, T_c, **{**tp, "gap_cost": np.inf})
+        T_s0, _, cut0 = tempo_dp(tl, y, **{**tp, "gap_cost": np.inf})
         T0, off0, score_nogap = fine(T_s0, np.zeros(n), cut0)
         if score_nogap <= score + gap_select_margin * len(gaps):
             T, off, gaps, gap_ms, T_s, score, cut = T0, off0, [], np.zeros(n), T_s0, score_nogap, cut0
@@ -674,7 +762,7 @@ def align_hybrid(timeline_json: Path, wav: Path, out_json: Path, radius_beats: f
                 tried.add((k_gap, ban))
                 gc = np.full(n + 1, float(base_cost))
                 gc[max(0, k_gap - ban):k_gap + ban + 1] = np.inf
-                T_b, gaps_b, cut_b = tempo_dp(tl, y, T_c, **{**tp, "gap_cost": gc})
+                T_b, gaps_b, cut_b = tempo_dp(tl, y, **{**tp, "gap_cost": gc})
                 if len(gaps_b) > len(gaps) or [g for g, _ in gaps_b] == [g for g, _ in gaps]:
                     continue
                 gm_b = np.zeros(n)
@@ -741,6 +829,11 @@ def align_hybrid(timeline_json: Path, wav: Path, out_json: Path, radius_beats: f
         "refine_chroma_change": refine_dchroma,
         # Mean chroma match per bar (≈ 0: the tab and the audio may be different songs)
         "chroma_match": round(chroma_curve_score(tl, y, T, use_held, bars=cut, mean=True), 3),
+        # Semitones the recording sounds above the tab (another tuning, a capo); the tab was aligned
+        # transposed by it. 0: same key. Per pitched track too: a track can be written in another key
+        # than the rest of the tab
+        "key_shift": key,
+        "track_key_shifts": {str(tr): key + odd_tracks.get(tr, 0) for tr in pitched},
     }
     conf = bar_confidence(E, shifts, beat_ms)
     result["bar_confidence"] = [None if np.isnan(x) else round(float(x), 3) for x in conf]

@@ -47,6 +47,11 @@ Then go back to the game's title screen to load the new song.
 - With `--audio`, the sync points are used when that audio is the same recording as the tab's. Otherwise the tab is aligned as usual.
 - `--timing sync-points` or `--timing align` forces one or the other.
 
+**Tabs written for another tuning than the recording** (E standard for a song recorded a semitone down, a missing capo):
+- The build finds the difference, syncs the tab anyway and moves the tuning of the arrangements to match, with the same frets. The report says by how much.
+- It also finds a single track written in another key than the rest of the tab (a bass half a step down under a guitar in standard tuning) and moves only that arrangement.
+- `--keep-tuning` keeps the tab's tuning.
+
 The game folder defaults to Steam's `Rocksmith2014/dlc`. Change it in the web app's Settings.
 
 ## Tones
