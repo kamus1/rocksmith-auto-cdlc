@@ -6,8 +6,12 @@ generated songs, tones and environment status. One job at a time (memory).
 
 import asyncio
 import json
+import multiprocessing
+import os
 import re
 import shutil
+import signal
+import subprocess
 import threading
 import time
 import traceback
@@ -19,6 +23,7 @@ from fastapi.responses import FileResponse, PlainTextResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
 from .. import pipeline
+from . import worker
 from ..pipeline import ROOT, TONE_CATEGORIES, TONES_DIR, PipelineError, dlc_dir
 
 STATIC = Path(__file__).resolve().parent / "static"
@@ -49,6 +54,8 @@ class Job:
         self.events: list[dict] = []
         self.finished = False
         self.started = time.time()
+        self.stoppable = False      # only builds, which run in their own process
+        self.stop_asked = False
 
     def emit(self, **event) -> None:
         event["t"] = round(time.time() - self.started, 1)
@@ -82,6 +89,90 @@ def start_job(kind: str, work) -> Job:
     return job
 
 
+def _kill_tree(proc) -> None:
+    """Kills the build process and what it started (ffmpeg, dotnet)."""
+    if not proc.is_alive():
+        return
+    if os.name == "nt":
+        subprocess.run(["taskkill", "/T", "/F", "/PID", str(proc.pid)], capture_output=True)
+    else:
+        try:
+            os.killpg(proc.pid, signal.SIGKILL)   # the worker leads its own process group
+        except OSError:                           # killed before it got there
+            proc.kill()
+    proc.join(10)
+
+
+def _drop_partial_packages(since: float) -> None:
+    """A build stopped while packaging can leave a cut .psarc: those written by this job are deleted."""
+    for f in BUILD.glob("*/pkg/*_p.psarc") if BUILD.is_dir() else []:
+        if f.parent.parent.name not in NOT_SONGS and f.stat().st_mtime >= since:
+            f.unlink(missing_ok=True)
+
+
+def start_build_job(opts: pipeline.BuildOptions) -> Job:
+    """Runs the build in its own process (worker.build), so that it can be stopped. One job at a time."""
+    if not _busy.acquire(blocking=False):
+        raise HTTPException(409, "A job is already running; wait for it to finish.")
+    job = Job("build")
+    job.stoppable = True
+    JOBS[job.id] = job
+    ctx = multiprocessing.get_context("spawn")
+    events, child_end = ctx.Pipe(duplex=False)
+    proc = ctx.Process(target=worker.build, args=(opts, child_end), daemon=True)
+
+    def run():
+        ended = False
+        try:
+            proc.start()
+            child_end.close()
+            while not job.stop_asked:
+                if not events.poll(0.2):
+                    continue
+                try:
+                    ev = events.recv()
+                except EOFError:          # the process ended without saying done or error
+                    break
+                if ev["type"] == "done":
+                    ev["result"]["version"] = _version(Path(ev["result"]["psarc"]).name)
+                job.emit(**ev)
+                if ev["type"] in ("done", "error"):
+                    ended = True
+                    break
+            if not ended and job.stop_asked:
+                _kill_tree(proc)
+                _drop_partial_packages(job.started)
+                job.emit(type="stopped")
+            elif not ended:
+                proc.join(10)
+                job.emit(type="error", message=f"The build stopped unexpectedly (exit code {proc.exitcode}).")
+        except Exception as e:  # noqa: BLE001
+            _kill_tree(proc)
+            job.emit(type="error", message=f"Unexpected error: {e!r}", detail=traceback.format_exc())
+        finally:
+            proc.join(10)
+            events.close()
+            job.finished = True
+            _busy.release()
+
+    threading.Thread(target=run, daemon=True).start()
+    return job
+
+
+@app.post("/api/jobs/{job_id}/stop")
+def stop_job(job_id: str):
+    """Stops a running build. What it already wrote stays in build/, except a cut .psarc."""
+    job = JOBS.get(job_id)
+    if job is None:
+        raise HTTPException(404, "Unknown job")
+    if not job.stoppable:
+        raise HTTPException(400, "This job cannot be stopped.")
+    if job.finished:
+        raise HTTPException(409, "The job already finished.")
+    job.stop_asked = True
+    return {"ok": True}
+
+
 @app.get("/api/jobs/{job_id}/events")
 async def job_events(job_id: str, request: Request):
     job = JOBS.get(job_id)
@@ -109,7 +200,7 @@ async def job_events(job_id: str, request: Request):
 def current_job():
     """The running job (to recover progress if the page is reloaded)."""
     running = [j for j in JOBS.values() if not j.finished]
-    return {"id": running[-1].id, "kind": running[-1].kind} if running else {"id": None}
+    return {"id": running[-1].id, "kind": running[-1].kind, "stoppable": running[-1].stoppable} if running else {"id": None}
 
 
 # ---------------------------------------------------------------- new song
@@ -178,15 +269,7 @@ def build(upload_id: str = Form(...), audio: UploadFile = File(...), lead: str =
     except ValueError:
         raise HTTPException(400, "Invalid track or year")
 
-    def work(job: Job) -> dict:
-        r = pipeline.build_song(opts, on_step=lambda n, t: job.emit(type="step", n=n, of=pipeline.STEPS, title=t),
-                                on_log=lambda line: job.emit(type="log", line=line))
-        return {"song": r.out_dir.name, "psarc": str(r.psarc), "deployed": str(r.deployed) if r.deployed else None,
-                "meta": {k: v for k, v in r.meta.items() if k != "cover"}, "tracks": r.tracks, "tone": r.tone,
-                "gaps": r.alignment.get("gaps", []), "suspicious_bars": len(r.alignment.get("suspicious_bars", [])),
-                "warnings": r.warnings, "version": _version(r.psarc.name)}
-
-    job = start_job("build", work)
+    job = start_build_job(opts)
     return {"job_id": job.id}
 
 
@@ -258,6 +341,25 @@ def redeploy(name: str):
     except PipelineError as e:
         raise HTTPException(400, str(e))
     return {"deployed": target.name, "log": logs}
+
+
+@app.post("/api/songs/{name}/cover/lookup")
+def song_cover_lookup(name: str):
+    """Looks up the cover on iTunes again and packs the song with it. If it was in the game, copies the new one."""
+    d = _song_dir(name)
+    old = _psarc(d)
+    was_deployed = old is not None and _deployed(old) is not None
+    if not _busy.acquire(blocking=False):
+        raise HTTPException(409, "A job is running; wait for it to finish.")
+    logs = []
+    try:
+        r = pipeline.refresh_cover(d, logs.append)
+        deployed = pipeline.deploy(r["psarc"], logs.append).name if was_deployed else None
+    except PipelineError as e:
+        raise HTTPException(400, str(e))
+    finally:
+        _busy.release()
+    return {"album": r["album"], "year": r["year"], "deployed": deployed, "log": logs}
 
 
 @app.get("/api/songs/{name}/cover")
